@@ -541,6 +541,12 @@ How it is built, and why:
   answer is printed. A dead collector, a bad key or no network costs you nothing
   but the trace: verified to return the same answer, at the same speed, with the
   endpoint pointed at a closed port.
+- **Failures are traced too.** A run that errored, or that hit `TERAT_MAX`
+  before the model finished, still posts what it has: the question, the turns
+  and tool calls that did happen, and no invented completion. These were the one
+  class of run that produced no trace at all, which is backwards — a question
+  that failed is the one worth looking at. A run that produced no events
+  whatsoever has nothing to build a span from, and is still silent.
 - **Silent when it cannot work.** No `curl`, no `awk`, an unwritable temp
   directory or an empty event stream all mean no trace, never a broken prompt.
 - **A real `/v1/traces` path.** Unlike the OTel HTTP exporters, the path is not

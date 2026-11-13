@@ -273,71 +273,20 @@ answer() {
 	'
 }
 
-# Nothing at all came back: report why rather than printing an empty label.
-if [ ! -s "$tmp" ]; then
-	[ -s "$tmp.err" ] && head -5 "$tmp.err" >&2
-	if [ -e "$tmp.to" ]; then
-		printf 'tert: gave up after %ss\n' "$max" >&2
-	else
-		printf 'tert: no answer\n' >&2
-	fi
-	rm -f "$tmp" "$tmp.err" "$tmp.to"
-	exit 1
-fi
-
-ans=$(answer <"$tmp")
-# Events came back but nobody spoke: the run failed, or it only used tools. Say
-# so; do not print markup or an empty answer as though it were a reply.
-if [ -z "$ans" ]; then
-	# Say what the harness actually said. pi reports failures as a json event,
-	# but any other command put behind TERAT_CMD just writes to stderr, and a
-	# generic "no answer" hides a missing key or a bad flag behind a message
-	# that looks like terat's fault. Its own words are more use than ours.
-	msg=$(grep -o '"type":"error"[^}]*' "$tmp" 2>/dev/null | head -1)
-	[ -n "$msg" ] || msg=$(grep -v '^[[:space:]]*$' "$tmp.err" 2>/dev/null | head -1)
-	[ -n "$msg" ] && printf 'tert: %s\n' "$msg" >&2 ||
-		printf 'tert: no answer (the run ended without a reply)\n' >&2
-	rm -f "$tmp" "$tmp.err" "$tmp.to"
-	exit 1
-fi
-
-# On a terminal the answer is labelled, so it cannot be mistaken for command
-# output. Piped answers stay raw.
-#
-# The model writes prose as one very long line. A terminal does not wrap words,
-# it cuts at the exact column, so a 600-character sentence comes back with
-# "serve/rs" and "aga/in" split across lines and the left edge wandering. Break
-# it at spaces to the width we actually have. `fold -s` only splits a word that
-# is itself longer than the line, and leaves the short lines of a list or a code
-# block alone.
-if [ -t 1 ]; then
-	# Read the size from the controlling terminal: `tput cols` inside $( ) sees
-	# a pipe and answers 80, whatever the window really is, and an inherited
-	# COLUMNS can be stale after a resize. The terminal itself is authoritative.
-	cols=$(stty size </dev/tty 2>/dev/null | awk '{print $2}')
-	[ -n "$cols" ] || cols=${COLUMNS:-}
-	[ -n "$cols" ] || cols=$(tput cols 2>/dev/null)
-	# A pty can report 0 columns before anything sets a size, and `fold -w 0`
-	# is an error rather than a no-op.
-	case $cols in ''|*[!0-9]*) cols=80 ;; esac
-	[ "$cols" -ge 20 ] || cols=80
-	printf '\n'
-	# The label is part of the first line, so folding it with the answer keeps
-	# that line from running one label too wide. Stop a column short: a line
-	# that fills the last column leaves the terminal holding a pending wrap,
-	# and the newline then opens a blank line in the middle of the answer.
-	printf '%s: %s\n' "${TERAT_NAME:-Pi}" "$ans" | fold -s -w $((cols - 1))
-else
-	printf '%s\n' "$ans"
-fi
-printf 'user: %s\nassistant: %s\n' "$q" "$ans" >>"$thread"
-
 # --- tracing ---------------------------------------------------------------
 # Off unless TERAT_OTLP names an endpoint. The trace is built from the very
 # event stream the answer came from, so it cannot disagree with what actually
 # ran, and it is posted only after the answer is printed and only in the
 # background: a slow or dead collector costs the prompt nothing.
-if [ -n "${TERAT_OTLP:-}" ] && [ -s "$tmp" ]; then
+#
+# Defined here, above the answer checks, and called from the failure paths too:
+# a run that errored or timed out is exactly the run whose trace is worth
+# having, and for a while those were the only questions that left no trace at
+# all.
+trace_ask() {
+	if [ -z "${TERAT_OTLP:-}" ] || [ ! -s "$tmp" ]; then
+		return 0
+	fi
 	# Resolve the entry point before taking its directory: tert is normally
 	# reached through ~/.local/bin/tert, and terat-trace.awk sits next to the
 	# real script rather than next to the link. Getting this wrong drops every
@@ -407,5 +356,77 @@ if [ -n "${TERAT_OTLP:-}" ] && [ -s "$tmp" ]; then
 	else
 		rm -f "$body"
 	fi
+}
+
+# Nothing at all came back: report why rather than printing an empty label.
+if [ ! -s "$tmp" ]; then
+	[ -s "$tmp.err" ] && head -5 "$tmp.err" >&2
+	if [ -e "$tmp.to" ]; then
+		printf 'tert: gave up after %ss\n' "$max" >&2
+	else
+		printf 'tert: no answer\n' >&2
+	fi
+	trace_ask
+	rm -f "$tmp" "$tmp.err" "$tmp.to"
+	exit 1
 fi
+
+ans=$(answer <"$tmp")
+# Events came back but nobody spoke: the run failed, or it only used tools. Say
+# so; do not print markup or an empty answer as though it were a reply.
+if [ -z "$ans" ]; then
+	# Say what the harness actually said. pi reports failures as a json event,
+	# but any other command put behind TERAT_CMD just writes to stderr, and a
+	# generic "no answer" hides a missing key or a bad flag behind a message
+	# that looks like terat's fault. Its own words are more use than ours.
+	msg=$(grep -o '"type":"error"[^}]*' "$tmp" 2>/dev/null | head -1)
+	[ -n "$msg" ] || msg=$(grep -v '^[[:space:]]*$' "$tmp.err" 2>/dev/null | head -1)
+	# Checked before the generic wording because a killed run answers nothing:
+	# reporting "ended without a reply" for it sends you looking for a model
+	# fault when the real cause was the clock, and TERAT_MAX is the fix.
+	if [ -e "$tmp.to" ]; then
+		printf 'tert: gave up after %ss, no reply yet\n' "$max" >&2
+	elif [ -n "$msg" ]; then
+		printf 'tert: %s\n' "$msg" >&2
+	else
+		printf 'tert: no answer (the run ended without a reply)\n' >&2
+	fi
+	trace_ask
+	rm -f "$tmp" "$tmp.err" "$tmp.to"
+	exit 1
+fi
+
+# On a terminal the answer is labelled, so it cannot be mistaken for command
+# output. Piped answers stay raw.
+#
+# The model writes prose as one very long line. A terminal does not wrap words,
+# it cuts at the exact column, so a 600-character sentence comes back with
+# "serve/rs" and "aga/in" split across lines and the left edge wandering. Break
+# it at spaces to the width we actually have. `fold -s` only splits a word that
+# is itself longer than the line, and leaves the short lines of a list or a code
+# block alone.
+if [ -t 1 ]; then
+	# Read the size from the controlling terminal: `tput cols` inside $( ) sees
+	# a pipe and answers 80, whatever the window really is, and an inherited
+	# COLUMNS can be stale after a resize. The terminal itself is authoritative.
+	cols=$(stty size </dev/tty 2>/dev/null | awk '{print $2}')
+	[ -n "$cols" ] || cols=${COLUMNS:-}
+	[ -n "$cols" ] || cols=$(tput cols 2>/dev/null)
+	# A pty can report 0 columns before anything sets a size, and `fold -w 0`
+	# is an error rather than a no-op.
+	case $cols in ''|*[!0-9]*) cols=80 ;; esac
+	[ "$cols" -ge 20 ] || cols=80
+	printf '\n'
+	# The label is part of the first line, so folding it with the answer keeps
+	# that line from running one label too wide. Stop a column short: a line
+	# that fills the last column leaves the terminal holding a pending wrap,
+	# and the newline then opens a blank line in the middle of the answer.
+	printf '%s: %s\n' "${TERAT_NAME:-Pi}" "$ans" | fold -s -w $((cols - 1))
+else
+	printf '%s\n' "$ans"
+fi
+printf 'user: %s\nassistant: %s\n' "$q" "$ans" >>"$thread"
+
+# After the answer is on screen, so a slow collector delays nothing.
+trace_ask
 rm -f "$tmp" "$tmp.err" "$tmp.to"
