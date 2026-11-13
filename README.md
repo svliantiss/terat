@@ -377,6 +377,24 @@ lands. Watching for a gap would kill exactly the runs worth waiting for. So
 when the agent is genuinely done. A silent minute is then just work in
 progress, and `TERAT_MAX` is only a backstop.
 
+That last word is load-bearing, so the number has to match it. The stream goes
+completely quiet while a tool runs — measured against `sleep 40`, the byte count
+did not move once between the tool starting and finishing — so a timeout fires
+mid-task rather than during a stall, and no smaller value is safe.
+
+At 120 seconds that happened during real work: a question that shelled out to a
+speedtest was killed while still thinking, lost its answer, and reported a
+failure that read like the model's fault. The default is now 600.
+
+Be aware that 600 is not a guarantee either. That same question took 125s on an
+idle machine and over 420s when three ran back to back, because it calls
+`networkQuality` twice at roughly 50 seconds a go and the tool time, not the
+model, sets the duration. A question whose tools take longer than `TERAT_MAX`
+will still be cut off, and the fix there is to raise `TERAT_MAX` for that
+question — the error now says so instead of claiming the run ended without a
+reply. Long tool calls are the one thing a fixed ceiling cannot accommodate;
+what it should never do is fire on an ordinary question, which is what 120 did.
+
 The answer printed is the text of the last assistant message that spoke — a
 turn that only called a tool has none, so its markup never reaches the prompt.
 
@@ -401,7 +419,7 @@ question is unaffected.
 | --- | --- | --- |
 | `TERAT_CMD` | `pi -p --mode json` | the model command; stdin in, answer out |
 | `TERAT_GRACE` | `40` | tenths of a quiet, used only for a plain-text command |
-| `TERAT_MAX` | `120` | give up after this many seconds |
+| `TERAT_MAX` | `600` | give up after this many seconds — a backstop, not a deadline |
 | `TERAT_OUT` | `40` | how many lines of a command's output are kept |
 | `TERAT_LIST` | `20` | how many names from the current directory are sent |
 | `TERAT_THREAD` | `~/.terat/thread.$$` | transcript sent as context, one per shell |

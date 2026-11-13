@@ -12,7 +12,14 @@
 # rather than one shared file: that is what mixed two terminals into one
 # conversation. $$ is tert itself, always fresh, so it cannot stand in.
 thread=${TERAT_THREAD:-$HOME/.terat/thread.$PPID}
-max=${TERAT_MAX:-120}
+# A backstop, not a deadline. `agent_end` is what normally ends a run, so this
+# only has to be long enough that it is never the thing that decides — pi is a
+# coding agent, and asking it to run a test suite or a speedtest legitimately
+# takes minutes and produces no output while the tool works. At 120 it fired
+# during real work and the run lost its answer, which reads exactly like a
+# broken model. Ten minutes is still short enough that a wedged run gives the
+# prompt back.
+max=${TERAT_MAX:-600}
 tmp=${TMPDIR:-/tmp}/tert.$$
 # When the question was asked, in milliseconds. Only used for tracing, and only
 # when the answer stream carries no timestamps of its own — a plain-text harness
