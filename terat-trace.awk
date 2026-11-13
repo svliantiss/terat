@@ -50,6 +50,11 @@ function num(line, key,   p, s) {
 # an object that itself contains a cost object with the same field names, so
 # searching the whole line — or taking the last match — reads the zeroed cost
 # figures instead of the real token counts.
+#
+# Decimals matter: costs arrive as 0.000475 and a digits-only match reads that
+# as 0, which is indistinguishable from a model with no price at all. The
+# fraction is matched too, and a leading-dot form is not valid JSON so it is
+# left to the integer case.
 function field(obj, line, f,   p, s) {
 	p = index(line, "\"" obj "\":")
 	if (!p) return ""
@@ -57,7 +62,7 @@ function field(obj, line, f,   p, s) {
 	p = index(s, "\"" f "\":")
 	if (!p) return ""
 	s = substr(s, p + length(f) + 3)
-	if (!match(s, /^-?[0-9]+/)) return ""
+	if (!match(s, /^-?[0-9]+(\.[0-9]+)?([eE][-+]?[0-9]+)?/)) return ""
 	return substr(s, RSTART, RLENGTH) + 0
 }
 
@@ -87,6 +92,15 @@ function A(k, v) {
 
 function I(k, v) {
 	return "{\"key\":\"" esc(k) "\",\"value\":{\"intValue\":\"" v "\"}}"
+}
+
+# Laminar reads cost as a JSON number and ignores a string or an int, so cost
+# attributes cannot go through A() or I(). printf with no exponent, because awk
+# would otherwise render small amounts as 1e-05 and some JSON readers disagree
+# about that being a number.
+function D(k, v) {
+	if (v == "") v = 0
+	return "{\"key\":\"" esc(k) "\",\"value\":{\"doubleValue\":" sprintf("%.10f", v + 0) "}}"
 }
 
 # One chat message, as JSON, for the input/output attributes. Laminar parses
@@ -181,6 +195,18 @@ function span(id, parent, name, from, to, attrs, code,   s) {
 		m_in[nm] = field("usage", $0, "input")
 		m_out[nm] = field("usage", $0, "output")
 		m_tot[nm] = field("usage", $0, "totalTokens")
+		# Cache reads are billed differently from fresh input tokens and are
+		# usually the bulk of a long conversation, so a trace that drops them
+		# understates both the token count and the cost.
+		m_cr[nm] = field("usage", $0, "cacheRead")
+		m_cw[nm] = field("usage", $0, "cacheWrite")
+		# pi computes cost per turn from its own price table. It is zero when
+		# that table has no price for the model — a subscription or a custom
+		# provider — which is not the same as free, and the trace records the
+		# zero it was given rather than inventing a number.
+		m_cin[nm] = field("cost", $0, "input")
+		m_cout[nm] = field("cost", $0, "output")
+		m_ctot[nm] = field("cost", $0, "total")
 		m_dur[nm] = num($0, "durationMs")
 		m_ts[nm] = num($0, "timestamp")
 		# The model's prose for this turn. A turn that only calls a tool has
@@ -261,6 +287,14 @@ END {
 			if (m_in[j] != "") a = a "," I("gen_ai.usage.input_tokens", m_in[j])
 			if (m_out[j] != "") a = a "," I("gen_ai.usage.output_tokens", m_out[j])
 			if (m_tot[j] != "") a = a "," I("llm.usage.total_tokens", m_tot[j])
+			if (m_cr[j] != "" && m_cr[j] > 0) a = a "," I("gen_ai.usage.cache_read_input_tokens", m_cr[j])
+			if (m_cw[j] != "" && m_cw[j] > 0) a = a "," I("gen_ai.usage.cache_creation_input_tokens", m_cw[j])
+			# Emitted even when zero: a span with no cost attributes is left
+			# blank, while an explicit 0 says "this model reported no price",
+			# which is the honest reading of a subscription plan.
+			a = a "," D("gen_ai.usage.input_cost", m_cin[j])
+			a = a "," D("gen_ai.usage.output_cost", m_cout[j])
+			a = a "," D("gen_ai.usage.cost", m_ctot[j])
 			# An LLM span with no messages shows an empty panel. The turn's own
 			# prompt is the question, and its completion is the prose the model
 			# returned; tool-call turns have no prose and get no output.

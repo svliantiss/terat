@@ -485,6 +485,34 @@ event stream the answer came from — token counts and the model name from each
 `gen_ai.*` attributes and `lmnr.span.type` that Laminar reads, which makes the
 token and cost panels work without a Laminar SDK.
 
+### Why a cost panel can still read `$0.00`
+
+The cost on a span is the cost **pi** computed for that turn, taken from the
+`cost` block of its own `message_end`. terat does not price tokens itself: a
+price table in a shell script would go stale, and it would disagree with the one
+tool that actually knows what was billed.
+
+pi can only price a turn if it has a price for the model. `~/.pi/agent/models.json`
+carries a `cost` block per model, and for a subscription or a custom provider it
+is all zeroes — which is what `some/model`
+looks like:
+
+```json
+"cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+```
+
+So the span shows `$0.00` because pi reported `$0.00`, not because the panel is
+broken. A metered provider with real prices in that block fills the panel in
+without any change here. To check whether a zero is real:
+
+```sh
+pi -p --mode json 'say hi' </dev/null | grep -o '"cost":{[^}]*}'
+```
+
+Cache reads are sent as `gen_ai.usage.cache_read_input_tokens` and count toward
+the span's tokens even when the price is zero — on a long conversation they are
+usually most of the tokens, so leaving them out understates the size of the run.
+
 Which attribute holds what is not obvious, and guessing it wrong is silent — the
 span renders, the panel is just empty:
 
