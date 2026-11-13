@@ -12,14 +12,13 @@
 # rather than one shared file: that is what mixed two terminals into one
 # conversation. $$ is tert itself, always fresh, so it cannot stand in.
 thread=${TERAT_THREAD:-$HOME/.terat/thread.$PPID}
-# A backstop, not a deadline. `agent_end` is what normally ends a run, so this
-# only has to be long enough that it is never the thing that decides — pi is a
-# coding agent, and asking it to run a test suite or a speedtest legitimately
-# takes minutes and produces no output while the tool works. At 120 it fired
-# during real work and the run lost its answer, which reads exactly like a
-# broken model. Ten minutes is still short enough that a wedged run gives the
-# prompt back.
-max=${TERAT_MAX:-600}
+# How many seconds of *silence with no tool running* count as wedged. Not a
+# limit on how long a question may take: a tool that keeps working is allowed to
+# keep working, so a half-hour soak test is fine. pi streams deltas while the
+# model generates, so real quiet is the abnormal case; 180 is far above the ~5s
+# gap measured during a long generation and far below anything a person would
+# wait on a dead run.
+max=${TERAT_MAX:-180}
 tmp=${TMPDIR:-/tmp}/tert.$$
 # When the question was asked, in milliseconds. Only used for tracing, and only
 # when the answer stream carries no timestamps of its own — a plain-text harness
@@ -143,10 +142,28 @@ if [ ! -t 0 ]; then
 	if [ -n "$q" ]; then out=$(tail -n 200); else IFS= read -r q; fi
 fi
 
+# Stop the harness and any children it still has. Children are signalled first
+# and the parent last, because killing the parent reparents them to init and
+# they become unreachable by parent pid. Only one level deep is enough: the
+# watchdog fires only when no tool is in flight (that is the condition it
+# measures), so the tree is at most a shell wrapper and the command it ran.
+# A Ctrl-C needs none of this — the terminal signals the whole foreground
+# group, which includes the tool.
+stop_child() {
+	[ -n "${pid:-}" ] || return 0
+	pkill -TERM -P "$pid" 2>/dev/null
+	kill -TERM "$pid" 2>/dev/null
+	sleep 0.2 2>/dev/null
+	pkill -KILL -P "$pid" 2>/dev/null
+	kill -KILL "$pid" 2>/dev/null
+	return 0
+}
+
 bye() {
-	kill "$pid" "$watchdog" 2>/dev/null
+	stop_child
+	kill "$watchdog" 2>/dev/null
 	[ -t 1 ] && printf '\r\033[K\033[?25h'
-	rm -f "$tmp" "$tmp.err" "$tmp.to" "$tmp.files" "$tmp.uniq"
+	rm -f "$tmp" "$tmp.err" "$tmp.to" "$tmp.stop" "$tmp.files" "$tmp.uniq"
 	exit "$1"
 }
 trap 'bye 130' INT TERM
@@ -171,17 +188,14 @@ spin() {
 			# must still stop, so fall back to the old quiet rule only once
 			# the answer has gone quiet for a long time.
 			if done_yet; then
-				kill "$pid" 2>/dev/null
+				stop_child
 				return 0
 			fi
 		done
 	done
 }
 
-# Has the agent finished? In json mode `agent_end` is the only true signal:
-# silence means it is thinking or a tool is running, which can last minutes, so
-# the old "no new bytes for a while" rule cut real tasks short. That rule is kept
-# only for a plain-text run, which has no marker to wait for.
+# Has the agent finished? In json mode `agent_end` is the only true signal.
 done_yet() {
 	grep -q '"type":"agent_end"' "$tmp" 2>/dev/null && return 0
 	# A json run without the marker is still going (or died); the watchdog
@@ -193,6 +207,23 @@ done_yet() {
 	[ "$size" = "$last" ] || { last=$size; g=0; return 1; }
 	g=$((g + 1))
 	[ "$g" -lt "${TERAT_GRACE:-40}" ]
+}
+
+# Is a tool call still running? A `tool_execution_start` with no matching
+# `tool_execution_end` after it. This is the whole reason a total timeout cannot
+# work: `networkQuality` takes ~50 seconds, a soak test takes half an hour, and
+# while either runs the stream is completely silent — indistinguishable from a
+# stall by watching bytes alone, and impossible to fit under any fixed ceiling
+# that also feels responsive.
+#
+# It is safe to trust because pi emits both events, always as a pair, and a
+# killed run cannot leave a start without an end. Two tools at once would both
+# be counted by a matched pair per start; pi runs them one at a time.
+tool_busy() {
+	[ -s "$tmp" ] || return 1
+	s=$(grep -c '"type":"tool_execution_start"' "$tmp" 2>/dev/null)
+	e=$(grep -c '"type":"tool_execution_end"' "$tmp" 2>/dev/null)
+	[ "${s:-0}" -gt "${e:-0}" ]
 }
 
 # The model cannot see the screen, so it gets the two cheap facts that make
@@ -235,12 +266,51 @@ clean() {
 	printf 'Question: %s\n' "$q"
 } | $pi_cmd "$@" >"$tmp" 2>"$tmp.err" &
 pid=$!
-# redirect: an inherited stdout would keep a pipe open after this exits
-( sleep "$max"; kill "$pid" 2>/dev/null && : >"$tmp.to" ) >/dev/null 2>&1 &
+# The watchdog measures silence, not total time, and a tool that is running does
+# not count as silence.
+#
+# A total ceiling was wrong in both directions. Set to two minutes it killed a
+# question that shelled out to a speedtest. Raised to ten it still killed a run
+# that was asked for a half-hour soak test — the ceiling has to be shorter than
+# a soak test to stay useful, so no value both accommodates long work and
+# returns the prompt when something wedges.
+#
+# Silence with nothing in flight is different: measured across a long
+# generation, the model streams deltas continuously and the longest genuine gap
+# was about five seconds. So a few minutes of quiet with no tool running means
+# the run is wedged, while any amount of quiet with a tool running is just work.
+idle=0
+(
+	while [ ! -e "$tmp.stop" ]; do
+		sleep 1
+		if tool_busy; then
+			idle=0
+			continue
+		fi
+		size=$(wc -c <"$tmp" 2>/dev/null | tr -d ' ')
+		size=${size:-0}
+		if [ "$size" != "$wsize" ]; then
+			wsize=$size
+			idle=0
+			continue
+		fi
+		idle=$((idle + 1))
+		if [ "$idle" -ge "$max" ]; then
+			# Mark first, then kill. The other order races: killing the
+			# child wakes the main shell's `wait` immediately, and it can
+			# reach the answer check and clean up before this subshell
+			# gets to write the marker it is about to be judged by.
+			: >"$tmp.to"
+			stop_child
+			break
+		fi
+	done
+) >/dev/null 2>&1 &
 watchdog=$!
 
 spin
 wait "$pid" 2>/dev/null
+: >"$tmp.stop"
 kill "$watchdog" 2>/dev/null
 wait "$watchdog" 2>/dev/null
 [ -t 1 ] && printf '\r\033[K\033[?25h'
@@ -369,12 +439,12 @@ trace_ask() {
 if [ ! -s "$tmp" ]; then
 	[ -s "$tmp.err" ] && head -5 "$tmp.err" >&2
 	if [ -e "$tmp.to" ]; then
-		printf 'tert: gave up after %ss\n' "$max" >&2
+		printf 'tert: no output for %ss with no tool running, so the run looks stuck\n' "$max" >&2
 	else
 		printf 'tert: no answer\n' >&2
 	fi
 	trace_ask
-	rm -f "$tmp" "$tmp.err" "$tmp.to"
+	rm -f "$tmp" "$tmp.err" "$tmp.to" "$tmp.stop"
 	exit 1
 fi
 
@@ -392,14 +462,14 @@ if [ -z "$ans" ]; then
 	# reporting "ended without a reply" for it sends you looking for a model
 	# fault when the real cause was the clock, and TERAT_MAX is the fix.
 	if [ -e "$tmp.to" ]; then
-		printf 'tert: gave up after %ss, no reply yet\n' "$max" >&2
+		printf 'tert: no output for %ss with no tool running, so the run looks stuck\n' "$max" >&2
 	elif [ -n "$msg" ]; then
 		printf 'tert: %s\n' "$msg" >&2
 	else
 		printf 'tert: no answer (the run ended without a reply)\n' >&2
 	fi
 	trace_ask
-	rm -f "$tmp" "$tmp.err" "$tmp.to"
+	rm -f "$tmp" "$tmp.err" "$tmp.to" "$tmp.stop"
 	exit 1
 fi
 
@@ -436,4 +506,4 @@ printf 'user: %s\nassistant: %s\n' "$q" "$ans" >>"$thread"
 
 # After the answer is on screen, so a slow collector delays nothing.
 trace_ask
-rm -f "$tmp" "$tmp.err" "$tmp.to"
+rm -f "$tmp" "$tmp.err" "$tmp.to" "$tmp.stop"

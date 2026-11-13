@@ -374,26 +374,29 @@ asked to create a file, run a test or search a tree, it goes silent while the
 tool works, and a file being created produces no output at all until the write
 lands. Watching for a gap would kill exactly the runs worth waiting for. So
 `tert` asks pi for `--mode json` and waits for the `agent_end` event it emits
-when the agent is genuinely done. A silent minute is then just work in
-progress, and `TERAT_MAX` is only a backstop.
+when the agent is genuinely done.
 
-That last word is load-bearing, so the number has to match it. The stream goes
-completely quiet while a tool runs — measured against `sleep 40`, the byte count
-did not move once between the tool starting and finishing — so a timeout fires
-mid-task rather than during a stall, and no smaller value is safe.
+There is no total time limit, because there cannot be a useful one. A tool call
+is silent for as long as the tool runs — measured against `sleep 40`, the byte
+count did not move at all between a `tool_execution_start` and its matching
+`tool_execution_end`. Any ceiling short enough to rescue you from a wedged run
+is therefore also short enough to kill a legitimate one. Two attempts to pick a
+number proved it: 120 seconds killed a question that shelled out to a speedtest,
+and 600 still killed a run asked to perform a half-hour soak test. Whatever
+value is chosen, the next longer tool breaks it.
 
-At 120 seconds that happened during real work: a question that shelled out to a
-speedtest was killed while still thinking, lost its answer, and reported a
-failure that read like the model's fault. The default is now 600.
+So the watchdog measures the right thing instead — **silence with no tool
+running**:
 
-Be aware that 600 is not a guarantee either. That same question took 125s on an
-idle machine and over 420s when three ran back to back, because it calls
-`networkQuality` twice at roughly 50 seconds a go and the tool time, not the
-model, sets the duration. A question whose tools take longer than `TERAT_MAX`
-will still be cut off, and the fix there is to raise `TERAT_MAX` for that
-question — the error now says so instead of claiming the run ended without a
-reply. Long tool calls are the one thing a fixed ceiling cannot accommodate;
-what it should never do is fire on an ordinary question, which is what 120 did.
+- A `tool_execution_start` with no `tool_execution_end` after it means work is
+  in progress. The clock is reset and the run may take as long as it needs.
+- Otherwise, a few minutes without a single new byte means something is wrong,
+  because pi streams deltas as the model generates: the longest real gap
+  measured across a long generation was about five seconds.
+
+`TERAT_MAX` is that quiet budget, in seconds — not a deadline. A 30-minute test
+runs to completion; a wedged run returns the prompt. Ctrl-C cancels immediately
+at any point.
 
 The answer printed is the text of the last assistant message that spoke — a
 turn that only called a tool has none, so its markup never reaches the prompt.
@@ -419,7 +422,7 @@ question is unaffected.
 | --- | --- | --- |
 | `TERAT_CMD` | `pi -p --mode json` | the model command; stdin in, answer out |
 | `TERAT_GRACE` | `40` | tenths of a quiet, used only for a plain-text command |
-| `TERAT_MAX` | `600` | give up after this many seconds — a backstop, not a deadline |
+| `TERAT_MAX` | `180` | seconds of silence with no tool running before giving up — not a total limit |
 | `TERAT_OUT` | `40` | how many lines of a command's output are kept |
 | `TERAT_LIST` | `20` | how many names from the current directory are sent |
 | `TERAT_THREAD` | `~/.terat/thread.$$` | transcript sent as context, one per shell |
@@ -559,8 +562,8 @@ How it is built, and why:
   answer is printed. A dead collector, a bad key or no network costs you nothing
   but the trace: verified to return the same answer, at the same speed, with the
   endpoint pointed at a closed port.
-- **Failures are traced too.** A run that errored, or that hit `TERAT_MAX`
-  before the model finished, still posts what it has: the question, the turns
+- **Failures are traced too.** A run that errored, or that went quiet for
+  `TERAT_MAX` seconds with no tool running, still posts what it has: the question, the turns
   and tool calls that did happen, and no invented completion. These were the one
   class of run that produced no trace at all, which is backwards — a question
   that failed is the one worth looking at. A run that produced no events
