@@ -1,0 +1,220 @@
+#!/bin/sh
+# terat-curl - default harness: stdin prompt -> OpenAI-compatible chat API -> stdout.
+#
+# POSIX sh + awk only, so it works on a fresh Alpine/Debian/minimal VPS where
+# python3 and jq do not exist. curl is used if present, wget otherwise. jq and
+# python3 are used to *parse* when they happen to be installed, never required.
+#
+# Exit status: 0 with the answer on stdout, non-zero with the reason on stderr.
+# A 503 or an {"error": ...} body is a failure, never an answer.
+
+url=${TERAT_URL:-https://router.example.com/v1/chat/completions}
+key=${TERAT_KEY:-${TERAT_ROUTER_KEY:-}}
+model=${TERAT_MODEL:-some/model}
+timeout=${TERAT_TIMEOUT:-45}
+
+case $model in
+*[!A-Za-z0-9._/:-]*)
+	printf 'terat-curl: refusing odd model name: %s\n' "$model" >&2
+	exit 2
+	;;
+esac
+
+# --- JSON-escape the prompt -------------------------------------------------
+# Explicit byte scan rather than gsub: backslash replacement rules differ
+# between awk implementations, a char loop does not.
+escaped=$(awk '
+{
+	s = $0
+	out = ""
+	for (i = 1; i <= length(s); i++) {
+		c = substr(s, i, 1)
+		if (c == "\\")      out = out "\\\\"
+		else if (c == "\"") out = out "\\\""
+		else if (c == "\t") out = out "\\t"
+		else if (c == "\r") out = out "\\r"
+		else                out = out c
+	}
+	if (NR > 1) printf "\\n"
+	printf "%s", out
+}')
+
+request='{"model":"'"$model"'","messages":[{"role":"user","content":"'"$escaped"'"}]}'
+
+# TERAT_DEBUG=1 dumps the request body to stderr; used by the test suite.
+[ -n "${TERAT_DEBUG:-}" ] && printf '%s\n' "$request" >&2
+
+# --- transport --------------------------------------------------------------
+tmp=${TMPDIR:-/tmp}/terat-curl.$$
+trap 'rm -f "$tmp" "$tmp.err" "$tmp.code" "$tmp.why"' EXIT INT TERM
+: >"$tmp"
+: >"$tmp.err"
+
+fetch() {
+	if command -v curl >/dev/null 2>&1; then
+		printf '%s' "$request" | curl -sS -m "$timeout" \
+			-o "$tmp" -w '%{http_code}' \
+			--connect-timeout 8 \
+			-H "Authorization: Bearer $key" \
+			-H 'content-type: application/json' \
+			--data-binary @- "$url" 2>"$tmp.err" >"$tmp.code"
+		return $?
+	fi
+	if command -v wget >/dev/null 2>&1; then
+		wget -q -T "$timeout" -O "$tmp" \
+			--header "Authorization: Bearer $key" \
+			--header 'content-type: application/json' \
+			--post-data "$request" "$url" 2>"$tmp.err"
+		printf '200' >"$tmp.code"
+		return $?
+	fi
+	printf 'terat-curl: need curl or wget\n' >&2
+	return 127
+}
+
+# --- parse the reply --------------------------------------------------------
+# Preference order: jq, python3, awk. All three understand the same shape.
+# Contract: the answer goes to stdout and the function returns 0; on failure
+# nothing goes to stdout, the reason goes to stderr, and the return is 1.
+parse() {
+	if command -v jq >/dev/null 2>&1; then
+		if jq -er '.choices[0].message.content // empty' "$tmp" 2>/dev/null; then
+			return 0
+		fi
+		jq -r '.error.message // .error // .message // empty | tostring' "$tmp" \
+			>&2 2>/dev/null
+		return 1
+	fi
+	if command -v python3 >/dev/null 2>&1; then
+		python3 - "$tmp" <<'PY' && return 0
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(1)
+try:
+    print(d["choices"][0]["message"]["content"], end="")
+except Exception:
+    e = d.get("error", d)
+    if isinstance(e, dict):
+        e = e.get("message") or e
+    print(e, file=sys.stderr)
+    sys.exit(1)
+PY
+		return 1
+	fi
+	awk -f /dev/stdin "$tmp" <<'AWK'
+function decode(rest,   out, c, e, h, n, k, d) {
+	out = ""
+	while (length(rest) > 0) {
+		c = substr(rest, 1, 1)
+		rest = substr(rest, 2)
+		if (c == "\"") break
+		if (c != "\\") { out = out c; continue }
+		if (rest == "") break
+		e = substr(rest, 1, 1)
+		rest = substr(rest, 2)
+		if      (e == "n") out = out "\n"
+		else if (e == "t") out = out "\t"
+		else if (e == "r") out = out "\r"
+		else if (e == "b") out = out "\b"
+		else if (e == "f") out = out "\f"
+		else if (e == "u") {
+			h = substr(rest, 1, 4)
+			rest = substr(rest, 5)
+			n = 0
+			for (k = 1; k <= 4; k++) {
+				d = index("0123456789abcdef", tolower(substr(h, k, 1))) - 1
+				if (d < 0) d = 0
+				n = n * 16 + d
+			}
+			out = out (n < 128 ? sprintf("%c", n) : "?")
+		}
+		else out = out e
+	}
+	return out
+}
+function pick(buf, key,   i, rest, q) {
+	i = index(buf, "\"" key "\"")
+	if (i == 0) return ""
+	rest = substr(buf, i + length(key) + 2)
+	q = index(rest, "\":")
+	if (q == 0) return ""
+	rest = substr(rest, q + 2)
+	while (length(rest) > 0 && substr(rest, 1, 1) != "\"") rest = substr(rest, 2)
+	if (length(rest) == 0) return ""
+	return decode(substr(rest, 2))
+}
+{ buf = buf $0 "\n" }
+END {
+	# A completion has a choices array. Anything else is an error, and its
+	# message belongs on stderr - never on stdout as if it were the answer.
+	if (index(buf, "\"choices\"") > 0) {
+		a = pick(buf, "content")
+		if (a != "") { printf "%s", a; exit 0 }
+		exit 1
+	}
+	e = pick(buf, "error")
+	if (e == "") e = pick(buf, "message")
+	if (e != "") print e > "/dev/stderr"
+	exit 1
+}
+AWK
+}
+
+# --- retries ----------------------------------------------------------------
+# The upstream 503s and dropped connections come in bursts; a single dropped
+# call must not lose the question. Backoff 1s, 2s, 3s ... capped.
+_backoff() {
+	d=$1
+	[ "$d" -gt 5 ] && d=5
+	sleep "$d"
+}
+
+max=${TERAT_RETRIES:-3}
+attempt=1
+while [ "$attempt" -le "$max" ]; do
+	if fetch; then
+		code=$(cat "$tmp.code" 2>/dev/null)
+		case $code in
+		2??) ;;
+		*)
+			# 4xx/5xx: report the server's own message, retry only on 5xx/429
+			msg=$(parse 2>&1 >/dev/null)
+			case $code in
+			408 | 429 | 5??)
+				if [ "$attempt" -lt "$max" ]; then
+					attempt=$((attempt + 1))
+					_backoff $attempt
+					continue
+				fi
+				;;
+			esac
+			printf 'terat-curl: HTTP %s%s\n' "$code" "${msg:+ - $msg}" >&2
+			exit 1
+			;;
+		esac
+
+		if answer=$(parse 2>"$tmp.why"); then
+			[ -n "$answer" ] || {
+				printf 'terat-curl: empty answer (HTTP %s)\n' "$code" >&2
+				exit 1
+			}
+			printf '%s\n' "$answer"
+			exit 0
+		fi
+		# 200 but no usable content: a failure, never an answer.
+		printf 'terat-curl: no answer (HTTP %s)%s\n' "$code" \
+			"$( [ -s "$tmp.why" ] && printf ' - %s' "$(head -c 300 "$tmp.why")")" >&2
+		exit 1
+	fi
+
+	# transport error
+	if [ "$attempt" -lt "$max" ]; then
+		attempt=$((attempt + 1))
+		_backoff $attempt
+		continue
+	fi
+	printf 'terat-curl: request failed: %s\n' "$(head -c 300 "$tmp.err")" >&2
+	exit 1
+done

@@ -1,0 +1,2 @@
+# The tracing key is a bearer secret. It belongs on this machine only.
+.env

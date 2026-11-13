@@ -1,0 +1,411 @@
+#!/bin/sh
+# tert - ask pi one question and print the answer.
+#
+#   tert "why did that build fail?"
+#   tert @shot.png "what is this?"
+#   printf 'why?\n' | tert
+#
+# In zsh with terat.zsh loaded, `@` on a line switches the prompt into ask mode.
+
+# One transcript per shell. TERAT_THREAD is set by terat.zsh, but a shell started
+# before that line existed would not have it, so fall back to the parent's pid
+# rather than one shared file: that is what mixed two terminals into one
+# conversation. $$ is tert itself, always fresh, so it cannot stand in.
+thread=${TERAT_THREAD:-$HOME/.terat/thread.$PPID}
+max=${TERAT_MAX:-120}
+tmp=${TMPDIR:-/tmp}/tert.$$
+# When the question was asked, in milliseconds. Only used for tracing, and only
+# when the answer stream carries no timestamps of its own — a plain-text harness
+# has none, so without this the root span would claim to have taken no time.
+#
+# Sub-second precision where the platform has it. `date +%s` alone rounds to a
+# second, which reports most questions as 0ms; a `date` that ignores %N (busybox,
+# older BSD) echoes the suffix back, so that is detected and falls back to whole
+# seconds instead of storing nonsense.
+now_ms() {
+	_terat_t=$(date +%s%N 2>/dev/null)
+	case $_terat_t in
+	''|*[!0-9]*) _terat_t=$(date +%s 2>/dev/null)
+		case $_terat_t in ''|*[!0-9]*) _terat_t=0 ;; esac
+		_terat_t=$((_terat_t * 1000)) ;;
+	*) _terat_t=$((_terat_t / 1000000)) ;;
+	esac
+	printf '%s' "$_terat_t"
+}
+started=$(now_ms)
+mkdir -p "${thread%/*}" 2>/dev/null
+
+# pi works natively here: same tools, same permissions, same default prompt as
+# running `pi` yourself — it can create files, run commands, read the project.
+# This script is only the transport: it adds the transcript and question, and
+# prints what comes back. `--no-tools` was never right: it left the model unable
+# to do the thing being asked while still claiming to be an agent.
+#
+# `-p` runs once and prints, which is what a prompt wants. Left as a plain
+# answer, though, it cannot be told when the agent has finished: pi prints its
+# last line and then lingers, so the old code guessed from a pause in the output
+# and killed it ~4s later. That is fatal for real work, where a tool call (a
+# build, a search) is silent for far longer than an answer. `--mode json` emits
+# `agent_end` when the agent is genuinely done, so the wait is exact instead of
+# guessed, and no run is cut off in the middle of doing something.
+pi_cmd=${TERAT_CMD:-pi -p --mode json}
+
+# Trace propagation, off unless TERAT_TRACE_ID is set.
+#
+# pi does not emit W3C trace context, so without this the question, the model
+# calls it causes and the router's own ledger are separate records that cannot
+# be joined. Here the id is put on the request as `traceparent`; router reads
+# that back into `requests.trace_id`, and the OTLP spans use the same id, so one
+# value finds the whole thing.
+#
+# It is an extension loaded with -e, not a header in models.json, because pi
+# treats a header that resolves to nothing as a fatal error: a static
+# `${TERAT_*}` entry breaks every plain `pi` on a machine without those
+# variables. Loaded this way it exists only for this run, and the extension
+# returns immediately when the variables are absent.
+# A traceparent is a fixed shape, and router takes whatever sits between the
+# dashes as the id. A wrong length would be stored as a trace id that matches
+# nothing and reads as a random string, so hold the value to 32 lowercase hex
+# digits and drop the propagation entirely when it is not — asking for a trace
+# with a bad id is a mistake worth ignoring, not a reason to fail the question.
+trace_id=${TERAT_TRACE_ID:-}
+case $trace_id in
+*[!0-9a-f]*) trace_id= ;;
+esac
+[ ${#trace_id} -eq 32 ] || trace_id=
+if [ -n "$trace_id" ] && [ -z "${TERAT_CMD:-}" ]; then
+	trace_span=${TERAT_TRACE_SPAN:-$(od -An -tx1 -N8 /dev/urandom 2>/dev/null | tr -d ' \n')}
+	case $trace_span in
+	????????????????) ;;
+	*) trace_span=$(printf '%016x' $$) ;;
+	esac
+	trace_ext=$(cd "$(dirname "$0")" 2>/dev/null && pwd)/terat-trace.js
+	if [ -f "$trace_ext" ]; then
+		TERAT_TRACE_ID=$trace_id TERAT_TRACE_SPAN=$trace_span \
+			export TERAT_TRACE_ID TERAT_TRACE_SPAN
+		pi_cmd="$pi_cmd -e $trace_ext"
+	fi
+fi
+
+# Attachments. A word starting with @ or # names a file or folder: pi receives
+# it as an @file argument, and a folder is expanded to the files it holds
+# because pi cannot read a directory. A word that names nothing stays part of
+# the question, so "@nobody" is safe. In ask mode the zsh hook has already
+# rejoined unquoted paths containing spaces, so what arrives here is one word.
+: >"$tmp.files"
+q=''
+for a in "$@"; do
+	case $a in
+	@?* | '#'?*)
+		p=${a#[@#]}
+		case $p in "~") p=$HOME ;; "~"/*) p=$HOME${p#\~} ;; esac
+		if [ -d "$p" ]; then
+			find "$p" -maxdepth 1 -type f >>"$tmp.files" 2>/dev/null
+		elif [ -f "$p" ]; then
+			printf '%s\n' "$p" >>"$tmp.files"
+		else
+			q="$q $a"
+		fi
+		;;
+	*) q="$q $a" ;;
+	esac
+done
+q=${q# }
+# A folder and a file inside it can both be named; keep one of each.
+awk '!seen[$0]++' "$tmp.files" >"$tmp.uniq" 2>/dev/null
+set --
+while IFS= read -r f; do set -- "$@" "@$f"; done <"$tmp.uniq"
+rm -f "$tmp.files" "$tmp.uniq"
+
+# `tert` with no question is just a shell: the same zsh you would otherwise
+# start, which loads terat.zsh and with it the capture. Nothing is wrapped, so
+# this is all of "normal mode". It has to come before the read below, which
+# would otherwise block waiting for a question that is not coming.
+if [ "$#" -eq 0 ] && [ -t 0 ] && [ -t 1 ]; then
+	exec "${TERAT_SHELL_BIN:-/bin/zsh}" -l
+fi
+
+[ -z "$q" ] && IFS= read -r q
+[ -z "$q" ] && [ "$#" -eq 0 ] && exit 0
+
+# Output piped in is context. A shell cannot see what its own commands printed,
+# so this is the one way to show it: `ls -l | tert "what is this?"`. With no
+# question given, the first line of the pipe is the question instead.
+out=''
+if [ ! -t 0 ]; then
+	if [ -n "$q" ]; then out=$(tail -n 200); else IFS= read -r q; fi
+fi
+
+bye() {
+	kill "$pid" "$watchdog" 2>/dev/null
+	[ -t 1 ] && printf '\r\033[K\033[?25h'
+	rm -f "$tmp" "$tmp.err" "$tmp.to" "$tmp.files" "$tmp.uniq"
+	exit "$1"
+}
+trap 'bye 130' INT TERM
+
+# Spin below the question, hide the cursor (it would sit on the frame), and
+# Wait for the run to finish, not for a pause in the output. In json mode pi
+# writes `agent_end` on one line when the agent is done, so this stops exactly
+# then: a tool that is silent for a minute is just working, and is not mistaken
+# for a finished answer. The spinner is drawn meanwhile.
+spin() {
+	case ${LC_ALL:-${LC_CTYPE:-${LANG:-}}} in
+	*[Uu][Tt][Ff]*8*) frames='⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏' ;;
+	*) frames='- \ | /' ;;
+	esac
+	[ -t 1 ] && printf '\033[?25l'
+	while kill -0 "$pid" 2>/dev/null; do
+		for f in $frames; do
+			sleep 0.1 2>/dev/null || sleep 1
+			kill -0 "$pid" 2>/dev/null || return 0
+			[ -t 1 ] && printf '\r%s ' "$f"
+			# A run that ends without the marker (an error, an older pi)
+			# must still stop, so fall back to the old quiet rule only once
+			# the answer has gone quiet for a long time.
+			if done_yet; then
+				kill "$pid" 2>/dev/null
+				return 0
+			fi
+		done
+	done
+}
+
+# Has the agent finished? In json mode `agent_end` is the only true signal:
+# silence means it is thinking or a tool is running, which can last minutes, so
+# the old "no new bytes for a while" rule cut real tasks short. That rule is kept
+# only for a plain-text run, which has no marker to wait for.
+done_yet() {
+	grep -q '"type":"agent_end"' "$tmp" 2>/dev/null && return 0
+	# A json run without the marker is still going (or died); the watchdog
+	# decides that, not a pause in the stream.
+	grep -q '"type":"session"' "$tmp" 2>/dev/null && return 1
+	size=$(wc -c <"$tmp" 2>/dev/null | tr -d ' ')
+	size=${size:-0}
+	[ "$size" -gt 0 ] || { last=0; g=0; return 1; }
+	[ "$size" = "$last" ] || { last=$size; g=0; return 1; }
+	g=$((g + 1))
+	[ "$g" -lt "${TERAT_GRACE:-40}" ]
+}
+
+# The model cannot see the screen, so it gets the two cheap facts that make
+# "where is that file" and "clean up these screenshots" answerable: where this
+# shell is, and what sits there. Bounded, so it never crowds out the thread.
+#
+# Visible names only, because that is what the person sees when they type `ls`
+# and therefore what they mean by "those folders". dotfiles are not hidden from
+# the model, only pushed down: a home directory holds hundreds of them and they
+# would fill the list alphabetically before any real folder was named. A folder
+# of nothing but dotfiles still gets listed.
+here() {
+	printf 'Where: %s\n' "$PWD"
+	names=$(ls 2>/dev/null)
+	[ -n "$names" ] || names=$(ls -A 2>/dev/null)
+	[ -n "$names" ] || return 0
+	total=$(printf '%s\n' "$names" | wc -l | tr -d ' ')
+	names=$(printf '%s\n' "$names" | head -n "${TERAT_LIST:-20}" | tr '\n' ' ')
+	names=${names% } # tr leaves one behind
+	[ "$total" -gt "${TERAT_LIST:-20}" ] && names="$names... ($total in all)"
+	printf 'Here: %s\n' "$names"
+	printf '\n'
+}
+
+# A turn recorded before the system prompt was fixed may hold tool markup. Left
+# in the transcript it teaches the next answer to do the same, so drop the whole
+# turn rather than the tag: a half-turn would be read as an answer.
+clean() {
+	awk '
+		/^user: / { if (block ~ /DSML|<\|.*\|>/) block = ""; printf "%s", block; block = $0 "\n"; next }
+		{ block = block $0 "\n" }
+		END { if (block !~ /DSML|<\|.*\|>/) printf "%s", block }
+	'
+}
+
+{
+	here
+	[ -s "$thread" ] && { tail -n 200 "$thread" | clean; printf '\n'; }
+	[ -n "$out" ] && printf 'Output:\n%s\n\n' "$out"
+	printf 'Question: %s\n' "$q"
+} | $pi_cmd "$@" >"$tmp" 2>"$tmp.err" &
+pid=$!
+# redirect: an inherited stdout would keep a pipe open after this exits
+( sleep "$max"; kill "$pid" 2>/dev/null && : >"$tmp.to" ) >/dev/null 2>&1 &
+watchdog=$!
+
+spin
+wait "$pid" 2>/dev/null
+kill "$watchdog" 2>/dev/null
+wait "$watchdog" 2>/dev/null
+[ -t 1 ] && printf '\r\033[K\033[?25h'
+
+# The stream is json lines, one object per event. The answer is the text of the
+# last assistant message that actually spoke: a turn that only called a tool has
+# no text, and its markup must never be printed as if it were the reply.
+answer() {
+	awk '
+		function unescape(s,   out, c2) {
+			out = ""
+			while (s != "") {
+				c2 = substr(s, 1, 2)
+				if (c2 == "\\n") { out = out "\n"; s = substr(s, 3); continue }
+				if (c2 == "\\t") { out = out "\t"; s = substr(s, 3); continue }
+				if (c2 == "\\\"") { out = out "\""; s = substr(s, 3); continue }
+				if (c2 == "\\\\") { out = out "\\"; s = substr(s, 3); continue }
+				if (substr(s, 1, 1) == "\"") break
+				out = out substr(s, 1, 1); s = substr(s, 2)
+			}
+			return out
+		}
+		/"type":"message_end"/ && /"role":"assistant"/ {
+			# One message may hold several content chunks; join every text
+			# one and ignore tool calls, which carry arguments, not prose.
+			rest = $0; text = ""
+			while ((i = index(rest, "\"type\":\"text\",\"text\":\"")) > 0) {
+				rest = substr(rest, i + 22)
+				text = text unescape(rest)
+				rest = substr(rest, 2)
+			}
+			if (text != "") last = text
+		}
+		# A plain-text run (an older pi, or TERAT_CMD) has no events: keep it.
+		!/^\{/ && !/^\}/ { plain = plain $0 "\n" }
+		END { if (plain != "") printf "%s", plain; else if (last != "") printf "%s\n", last }
+	'
+}
+
+# Nothing at all came back: report why rather than printing an empty label.
+if [ ! -s "$tmp" ]; then
+	[ -s "$tmp.err" ] && head -5 "$tmp.err" >&2
+	if [ -e "$tmp.to" ]; then
+		printf 'tert: gave up after %ss\n' "$max" >&2
+	else
+		printf 'tert: no answer\n' >&2
+	fi
+	rm -f "$tmp" "$tmp.err" "$tmp.to"
+	exit 1
+fi
+
+ans=$(answer <"$tmp")
+# Events came back but nobody spoke: the run failed, or it only used tools. Say
+# so; do not print markup or an empty answer as though it were a reply.
+if [ -z "$ans" ]; then
+	# Say what the harness actually said. pi reports failures as a json event,
+	# but any other command put behind TERAT_CMD just writes to stderr, and a
+	# generic "no answer" hides a missing key or a bad flag behind a message
+	# that looks like terat's fault. Its own words are more use than ours.
+	msg=$(grep -o '"type":"error"[^}]*' "$tmp" 2>/dev/null | head -1)
+	[ -n "$msg" ] || msg=$(grep -v '^[[:space:]]*$' "$tmp.err" 2>/dev/null | head -1)
+	[ -n "$msg" ] && printf 'tert: %s\n' "$msg" >&2 ||
+		printf 'tert: no answer (the run ended without a reply)\n' >&2
+	rm -f "$tmp" "$tmp.err" "$tmp.to"
+	exit 1
+fi
+
+# On a terminal the answer is labelled, so it cannot be mistaken for command
+# output. Piped answers stay raw.
+#
+# The model writes prose as one very long line. A terminal does not wrap words,
+# it cuts at the exact column, so a 600-character sentence comes back with
+# "serve/rs" and "aga/in" split across lines and the left edge wandering. Break
+# it at spaces to the width we actually have. `fold -s` only splits a word that
+# is itself longer than the line, and leaves the short lines of a list or a code
+# block alone.
+if [ -t 1 ]; then
+	# Read the size from the controlling terminal: `tput cols` inside $( ) sees
+	# a pipe and answers 80, whatever the window really is, and an inherited
+	# COLUMNS can be stale after a resize. The terminal itself is authoritative.
+	cols=$(stty size </dev/tty 2>/dev/null | awk '{print $2}')
+	[ -n "$cols" ] || cols=${COLUMNS:-}
+	[ -n "$cols" ] || cols=$(tput cols 2>/dev/null)
+	# A pty can report 0 columns before anything sets a size, and `fold -w 0`
+	# is an error rather than a no-op.
+	case $cols in ''|*[!0-9]*) cols=80 ;; esac
+	[ "$cols" -ge 20 ] || cols=80
+	printf '\n'
+	# The label is part of the first line, so folding it with the answer keeps
+	# that line from running one label too wide. Stop a column short: a line
+	# that fills the last column leaves the terminal holding a pending wrap,
+	# and the newline then opens a blank line in the middle of the answer.
+	printf '%s: %s\n' "${TERAT_NAME:-Pi}" "$ans" | fold -s -w $((cols - 1))
+else
+	printf '%s\n' "$ans"
+fi
+printf 'user: %s\nassistant: %s\n' "$q" "$ans" >>"$thread"
+
+# --- tracing ---------------------------------------------------------------
+# Off unless TERAT_OTLP names an endpoint. The trace is built from the very
+# event stream the answer came from, so it cannot disagree with what actually
+# ran, and it is posted only after the answer is printed and only in the
+# background: a slow or dead collector costs the prompt nothing.
+if [ -n "${TERAT_OTLP:-}" ] && [ -s "$tmp" ]; then
+	# Resolve the entry point before taking its directory: tert is normally
+	# reached through ~/.local/bin/tert, and terat-trace.awk sits next to the
+	# real script rather than next to the link. Getting this wrong drops every
+	# trace silently, which is the worst way to lose them.
+	self=$0
+	[ -L "$self" ] && self=$(readlink "$self" 2>/dev/null) && [ -n "$self" ] || self=$0
+	trace_dir=$(cd "$(dirname "$self")" 2>/dev/null && pwd)
+	[ -f "$trace_dir/terat-trace.awk" ] || trace_dir=.
+	# Reuse the propagated id when there is one: the whole point of exporting
+	# traceparent is that the spans and the router's ledger settle on one value,
+	# so the trace must not mint a second id and quietly split them apart.
+	trace=$trace_id
+	[ -n "$trace" ] || trace=$(od -An -tx1 -N16 /dev/urandom 2>/dev/null | tr -d ' \n')
+	case $trace in
+	????????????????????????????????) ;;
+	*) trace=$(printf '%08x%08x%08x%08x' $$ "$(date +%s)" 0 1) ;;
+	esac
+	body=${TMPDIR:-/tmp}/terat.trace.$$
+	TERAT_TRACE_Q=$q TERAT_TRACE_A=$ans TERAT_TRACE_CWD=$PWD \
+		awk -v trace="$trace" \
+		-v seed="$(printf '%s' "$trace" | cut -c1-9)" \
+		-v nowms="$(now_ms)" \
+		-v began="$started" \
+		-f "$trace_dir/terat-trace.awk" "$tmp" >"$body" 2>/dev/null
+	if [ -s "$body" ] && command -v curl >/dev/null 2>&1; then
+		auth=
+		[ -n "${TERAT_OTLP_KEY:-}" ] && auth="Authorization: Bearer $TERAT_OTLP_KEY"
+		# Off by default, because a trace is not worth a broken prompt. It also
+		# does not go to stderr: this runs just after the answer, while the
+		# prompt is being redrawn, so stray output would land in the middle of
+		# it. A file is quiet and still says afterwards what went wrong.
+		#   unset / 0 / no     nothing at all
+		#   1 / yes / true     append to ${TMPDIR}/terat.otlp.log
+		#   anything else      treat it as the log path
+		dbg=
+		case ${TERAT_OTLP_DEBUG:-} in
+		'' | 0 | no | false) ;;
+		1 | yes | true) dbg=${TMPDIR:-/tmp}/terat.otlp.log ;;
+		*) dbg=$TERAT_OTLP_DEBUG ;;
+		esac
+		(
+			if [ -n "$dbg" ]; then
+				code=$(curl -sS -m 10 -X POST "$TERAT_OTLP" \
+					-H 'Content-Type: application/json' \
+					${auth:+-H "$auth"} \
+					--data-binary @"$body" \
+					-o "$body.res" -w '%{http_code}' 2>"$body.err")
+				{
+					printf '%s %s %s\n' \
+						"$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)" \
+						"${code:-curl-failed}" "$TERAT_OTLP"
+					# A 400 body names the offending field, which is the whole
+					# reason for turning this on. Kept short so the log stays
+					# readable when several questions are being asked.
+					[ -s "$body.res" ] && sed 's/^/  response: /' "$body.res" | head -5
+					[ -s "$body.err" ] && sed 's/^/  stderr: /' "$body.err" | head -5
+				} >>"$dbg" 2>/dev/null
+				rm -f "$body.res" "$body.err"
+			else
+				curl -sS -m 10 -X POST "$TERAT_OTLP" \
+					-H 'Content-Type: application/json' \
+					${auth:+-H "$auth"} \
+					--data-binary @"$body" >/dev/null 2>&1
+			fi
+			rm -f "$body"
+		) &
+	else
+		rm -f "$body"
+	fi
+fi
+rm -f "$tmp" "$tmp.err" "$tmp.to"
