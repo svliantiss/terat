@@ -42,10 +42,24 @@ if command -v tmux >/dev/null 2>&1; then
 	touch ~/.zshrc
 	printf 'export PATH="$HOME/.local/bin:$PATH"\nsource ~/Projects/terat/terat.zsh\n' >>~/.zshrc
 	tmux new-session -d -s T -x 100 -y 30 "zsh -i"
-	sleep 2
+	# Wait for the prompt to be ready rather than guessing: under qemu a
+	# `zsh -i` start-up and a fork can both take seconds, and a fixed sleep
+	# then reads a half-drawn screen and calls it a fault.
+	i=0
+	while [ $i -lt 40 ]; do
+		sleep 1
+		tmux capture-pane -pt T 2>/dev/null | grep -q '%' && break
+		i=$((i + 1))
+	done
 	tmux send-keys -t T '@hello' Enter
-	sleep 2
-	tmux capture-pane -pt T >/tmp/scr.txt 2>/dev/null
+	# Same here: poll for the label instead of assuming a fixed latency.
+	i=0
+	while [ $i -lt 60 ]; do
+		sleep 1
+		tmux capture-pane -pt T >/tmp/scr.txt 2>/dev/null
+		grep -q 'Pi:' /tmp/scr.txt && break
+		i=$((i + 1))
+	done
 	tmux kill-server 2>/dev/null
 	grep -q '🟅' /tmp/scr.txt || fail "pty: prompt never became the glyph"
 	grep -q 'Pi:' /tmp/scr.txt || fail "pty: answer had no label"
