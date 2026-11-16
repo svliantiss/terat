@@ -96,6 +96,24 @@ case $out in
 *) fail "a failing harness was served as the answer: [$out]" ;;
 esac
 
+# 8. a harness that answers and then refuses to exit must not be reported as a
+#    failure. pi stays alive after agent_end, so tert stops it and `wait` comes
+#    back with 143. Reading that as "the harness failed" hides a good answer
+#    behind an error, which is worse than either on its own.
+cat > ~/.local/bin/stubborn <<'SH'
+#!/bin/sh
+cat >/dev/null
+printf '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"STUBBORN_OK"}]}}\n'
+printf '{"type":"agent_end"}\n'
+sleep 600
+SH
+chmod +x ~/.local/bin/stubborn
+out=$(cd /tmp && TERAT_CMD=stubborn tert 'q' </dev/null 2>&1)
+case $out in
+*STUBBORN_OK*) ;;
+*) fail "a harness that answered was rejected as failed: [$out]" ;;
+esac
+
 # 6. with no pi installed the failure is explained, not a shell error
 err=$(cd /tmp && PATH=/usr/bin:/bin TERAT_CMD= ~/Projects/terat/tert q </dev/null 2>&1)
 case $err in
@@ -119,14 +137,24 @@ SH
 	tmux send-keys -t C 'echo CAPTURE_MARKER_XYZ' Enter
 	sleep 1.2
 	tmux send-keys -t C '@what did I run' Enter
-	sleep 2.5
-	tmux capture-pane -pt C >/tmp/scr2.txt 2>/dev/null
+	# Poll for the label rather than assuming a latency: under qemu an answer
+	# can take longer than any fixed sleep, and reading the screen too early
+	# reports "typing moved the transcript" for a run that never got there.
+	i=0
+	while [ $i -lt 60 ]; do
+		sleep 1
+		tmux capture-pane -pt C >/tmp/scr2.txt 2>/dev/null
+		grep -q 'Pi:' /tmp/scr2.txt && break
+		i=$((i + 1))
+	done
 	# typing must not disturb what is already on screen
-	before=$(grep -c 'Pi:' /tmp/scr2.txt 2>/dev/null || echo 0)
+	before=$(grep -c 'Pi:' /tmp/scr2.txt 2>/dev/null)
+	before=${before:-0}
 	tmux send-keys -t C 'typing'
 	sleep 1
 	tmux capture-pane -pt C >/tmp/scr3.txt 2>/dev/null
-	after=$(grep -c 'Pi:' /tmp/scr3.txt 2>/dev/null || echo 0)
+	after=$(grep -c 'Pi:' /tmp/scr3.txt 2>/dev/null)
+	after=${after:-0}
 	tmux kill-server 2>/dev/null
 	grep -q 'CAPTURE_MARKER_XYZ' /tmp/q.txt 2>/dev/null ||
 		fail "transcript did not reach the question"

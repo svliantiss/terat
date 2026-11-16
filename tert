@@ -188,7 +188,7 @@ bye() {
 	stop_child
 	kill "$watchdog" 2>/dev/null
 	[ -t 1 ] && printf '\r\033[K\033[?25h'
-	rm -f "$tmp" "$tmp.err" "$tmp.to" "$tmp.stop" "$tmp.files" "$tmp.uniq"
+	rm -f "$tmp" "$tmp.err" "$tmp.to" "$tmp.stop" "$tmp.stopped" "$tmp.files" "$tmp.uniq"
 	exit "$1"
 }
 trap 'bye 130' INT TERM
@@ -213,6 +213,12 @@ spin() {
 			# must still stop, so fall back to the old quiet rule only once
 			# the answer has gone quiet for a long time.
 			if done_yet; then
+				# Record that the stop was ours. A harness that does not
+				# exit on its own (pi keeps its process alive after
+				# agent_end) then dies by this signal, and `wait` returns
+				# 143 — which must not be read as "the harness failed",
+				# because it had already answered.
+				: >"$tmp.stopped"
 				stop_child
 				return 0
 			fi
@@ -482,7 +488,7 @@ if [ ! -s "$tmp" ]; then
 		printf 'tert: no answer (the harness exited %s)\n' "$rc" >&2
 	fi
 	trace_ask
-	rm -f "$tmp" "$tmp.err" "$tmp.to" "$tmp.stop"
+	rm -f "$tmp" "$tmp.err" "$tmp.to" "$tmp.stop" "$tmp.stopped"
 	exit 1
 fi
 
@@ -504,11 +510,14 @@ label() {
 # why on stdout and exits 1 ("rate limited, retry later"); serving that as the
 # answer is worse than saying the run failed, because it reads like the model
 # replied. Keep the text, but mark it as what it is.
-if [ "$rc" -ne 0 ] && [ -n "$ans" ]; then
+# Our own stop is not a failure: the harness had already answered and simply
+# did not exit, which is normal for pi. Only a harness that failed on its own
+# gets to have its complaint withheld.
+if [ "$rc" -ne 0 ] && [ -n "$ans" ] && [ ! -e "$tmp.stopped" ]; then
 	printf 'tert: the harness exited %s; it said:\n' "$rc" >&2
 	printf '%s\n' "$ans" >&2
 	trace_ask
-	rm -f "$tmp" "$tmp.err" "$tmp.to" "$tmp.stop"
+	rm -f "$tmp" "$tmp.err" "$tmp.to" "$tmp.stop" "$tmp.stopped"
 	exit 1
 fi
 
@@ -523,6 +532,25 @@ if [ -z "$ans" ]; then
 	# fragment showed the user '"type":"error","message":"quota exceeded"',
 	# which is the harness's wire format, not its words.
 	msg=$(sed -n 's/.*"type":"error"[^}]*"message":"\([^"]*\)".*/\1/p' "$tmp" 2>/dev/null | head -1)
+	# A provider that rejects the call puts its words in the assistant message's
+	# own errorMessage, which the pattern above does not see: pi then ends the
+	# turn with stopReason "error" and no text at all, and all the user learns is
+	# "ended without a reply" while their key is the actual problem.
+	if [ -z "$msg" ]; then
+		msg=$(awk '
+			/"errorMessage":"/ {
+				i = index($0, "\"errorMessage\":\"") + 16
+				rest = substr($0, i); out = ""
+				while (rest != "") {
+					c = substr(rest, 1, 2)
+					if (c == "\\\"") { out = out "\""; rest = substr(rest, 3); continue }
+					if (c == "\\\\") { out = out "\\"; rest = substr(rest, 3); continue }
+					if (substr(rest, 1, 1) == "\"") break
+					out = out substr(rest, 1, 1); rest = substr(rest, 2)
+				}
+				if (out != "") { print out; exit }
+			}' "$tmp" 2>/dev/null)
+	fi
 	[ -n "$msg" ] || msg=$(grep -v '^[[:space:]]*$' "$tmp.err" 2>/dev/null | head -1)
 	# Checked before the generic wording because a killed run answers nothing:
 	# reporting "ended without a reply" for it sends you looking for a model
@@ -535,7 +563,7 @@ if [ -z "$ans" ]; then
 		printf 'tert: no answer (the run ended without a reply)\n' >&2
 	fi
 	trace_ask
-	rm -f "$tmp" "$tmp.err" "$tmp.to" "$tmp.stop"
+	rm -f "$tmp" "$tmp.err" "$tmp.to" "$tmp.stop" "$tmp.stopped"
 	exit 1
 fi
 
@@ -579,4 +607,4 @@ printf 'user: %s\nassistant: %s\n' "$q" "$ans" >>"$thread"
 
 # After the answer is on screen, so a slow collector delays nothing.
 trace_ask
-rm -f "$tmp" "$tmp.err" "$tmp.to" "$tmp.stop"
+rm -f "$tmp" "$tmp.err" "$tmp.to" "$tmp.stop" "$tmp.stopped"
