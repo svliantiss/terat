@@ -11,7 +11,10 @@
 # before that line existed would not have it, so fall back to the parent's pid
 # rather than one shared file: that is what mixed two terminals into one
 # conversation. $$ is tert itself, always fresh, so it cannot stand in.
-thread=${TERAT_THREAD:-$HOME/.terat/thread.$PPID}
+# HOME can be unset (cron, `env -u HOME`, a stripped container). Falling back to
+# the current directory keeps the transcript working instead of trying to create
+# /.terat and printing a mkdir error at exit.
+thread=${TERAT_THREAD:-${HOME:-.}/.terat/thread.$PPID}
 # How many seconds of *silence with no tool running* count as wedged. Not a
 # limit on how long a question may take: a tool that keeps working is allowed to
 # keep working, so a half-hour soak test is fine. pi streams deltas while the
@@ -19,7 +22,13 @@ thread=${TERAT_THREAD:-$HOME/.terat/thread.$PPID}
 # gap measured during a long generation and far below anything a person would
 # wait on a dead run.
 max=${TERAT_MAX:-180}
-tmp=${TMPDIR:-/tmp}/tert.$$
+# TMPDIR is not to be trusted: it can name a directory that does not exist, or
+# one that cannot be written. Picking a temp dir that cannot hold a file used to
+# fail on the first `>` with "Permission denied" and no answer at all, so test
+# writability and fall back rather than assume.
+tmp_base=${TMPDIR:-/tmp}
+[ -d "$tmp_base" ] && [ -w "$tmp_base" ] || tmp_base=/tmp
+tmp=$tmp_base/tert.$$
 # When the question was asked, in milliseconds. Only used for tracing, and only
 # when the answer stream carries no timestamps of its own — a plain-text harness
 # has none, so without this the root span would claim to have taken no time.
@@ -392,7 +401,7 @@ trace_ask() {
 	????????????????????????????????) ;;
 	*) trace=$(printf '%08x%08x%08x%08x' $$ "$(date +%s)" 0 1) ;;
 	esac
-	body=${TMPDIR:-/tmp}/terat.trace.$$
+	body=$tmp_base/terat.trace.$$
 	TERAT_TRACE_Q=$q TERAT_TRACE_A=$ans TERAT_TRACE_CWD=$PWD \
 		awk -v trace="$trace" \
 		-v seed="$(printf '%s' "$trace" | cut -c1-9)" \
@@ -412,7 +421,7 @@ trace_ask() {
 		dbg=
 		case ${TERAT_OTLP_DEBUG:-} in
 		'' | 0 | no | false) ;;
-		1 | yes | true) dbg=${TMPDIR:-/tmp}/terat.otlp.log ;;
+		1 | yes | true) dbg=$tmp_base/terat.otlp.log ;;
 		*) dbg=$TERAT_OTLP_DEBUG ;;
 		esac
 		(
@@ -467,7 +476,10 @@ if [ -z "$ans" ]; then
 	# but any other command put behind TERAT_CMD just writes to stderr, and a
 	# generic "no answer" hides a missing key or a bad flag behind a message
 	# that looks like terat's fault. Its own words are more use than ours.
-	msg=$(grep -o '"type":"error"[^}]*' "$tmp" 2>/dev/null | head -1)
+	# Pull just the message out of the error event. Printing the matched
+	# fragment showed the user '"type":"error","message":"quota exceeded"',
+	# which is the harness's wire format, not its words.
+	msg=$(sed -n 's/.*"type":"error"[^}]*"message":"\([^"]*\)".*/\1/p' "$tmp" 2>/dev/null | head -1)
 	[ -n "$msg" ] || msg=$(grep -v '^[[:space:]]*$' "$tmp.err" 2>/dev/null | head -1)
 	# Checked before the generic wording because a killed run answers nothing:
 	# reporting "ended without a reply" for it sends you looking for a model
