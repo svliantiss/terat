@@ -1,4 +1,6 @@
 # The tracing key is a bearer secret. It belongs on this machine only.
 .env
 wansample.sh
-test/
+test/.src/
+test/.D.*
+test/.build.log
