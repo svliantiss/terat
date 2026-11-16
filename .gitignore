@@ -5,3 +5,6 @@ test/.src/
 test/.D.*
 test/.build.log
 .aider*
+
+# Harness state files land in the cwd; they are not project content.
+.grok/

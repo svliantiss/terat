@@ -91,17 +91,39 @@ Verified against real models, through the prompt: `pi`, `claude -p`,
 the glyph and the label and tracing. That is five harnesses, plain-text and
 json alike, which is what makes the contract worth stating.
 
-| harness | answers | `@file` | note |
+| harness | answers | `@file` | how |
 |---|---|---|---|
 | `pi -p --mode json` | yes | yes | the default |
+| `opencode run` | yes | yes | needs a provider in `opencode.json` |
 | `claude -p` | yes | yes | reads `@file` itself |
-| `qwen -p` | yes | yes | needs `--auth-type openai` for a non-Google endpoint |
-| `aichat` | yes | no | prefers `passy/<provider>/<model>` as the model id |
-| `llm -m <model>` | yes | no | register the endpoint in `extra-openai-models.yaml` |
+| `codex exec` | yes | no | needs `wire_api = "responses"` |
+| `grok -p` | wrapper | no | prints the transcript; needs a filter |
+| `dsh --profile headless` | no | no | wants its own DeepSeek key |
 
 `@file` on a harness that does not understand it is *silently* useless: the
-model is handed a path it cannot open and says so. Only attach files to pi,
-claude or qwen.
+model is handed a path it cannot open and says so. Only attach files to `pi`,
+`opencode` or `claude`.
+
+Two of these need more than a `TERAT_CMD`, and both for the same reason — they
+want the prompt as an argument, not on stdin:
+
+```sh
+# grok-cli takes the prompt as argv and prints the transcript as json lines.
+cat > ~/.local/bin/grok-ask <<'SH'
+#!/bin/sh
+exec grok -p "$(cat)" 2>/dev/null | sed -n 's/^{"role":"assistant","content":"\(.*\)"}$/\1/p' | tail -1
+SH
+TERAT_CMD=grok-ask tert 'what changed in this diff?'
+
+# codex needs wire_api = "responses" in ~/.codex/config.toml; "chat" is rejected.
+TERAT_CMD='codex exec --skip-git-repo-check' tert 'why is the build failing?'
+```
+
+`dsh` has the right shape on paper — "print the final assistant message and
+exit" — but its headless profile pins `deepseek-official` and a model id the
+local router does not serve, and a patch layer does not override it. Give it a
+real `DEEPSEEK_API_KEY` and it should work unchanged; without one it stops at
+`MISSING_CREDENTIAL`.
 
 Tested and not usable: `cursor-agent` needs a Cursor account and draws a TUI;
 `dsh` takes its task as an argument and wants its own key; `gemini` wants a
