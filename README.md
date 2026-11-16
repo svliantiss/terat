@@ -90,8 +90,24 @@ that want the question as an argument](#harnesses-that-want-the-question-as-an-a
 | `grok` | yes | yes | `grok -p {}` |
 | `dsh` | yes | yes | `dsh --profile headless {}` |
 
-All six are verified answering *and* reading an attached file, in a container and
-on a laptop, twice each and in both orders: `sh test/harnesses.sh 1` and `2`.
+All six are verified answering, reading an attached file, and driving the real
+prompt (glyph, label, prompt restored), in a container and on a laptop, twice
+each and in both orders:
+
+```sh
+docker build -f test/D.harness -t terat-harness test
+docker run --rm --add-host=host.docker.internal:host-gateway \
+	-e ROUTER_KEY -e TERM=xterm-256color \
+	-v "$PWD":/src:ro -v "$PWD/test/harnesses.sh":/h.sh:ro \
+	terat-harness sh /h.sh 1
+```
+
+Two things about that image are worth knowing before blaming the code. It needs
+`TERM` set, or `tmux` refuses to start a session and the prompt half of the test
+silently reports nothing. And it is a large image: a `docker build` that fails
+deep inside an `npm i -g` with a bare exit code is more often the daemon being
+out of disk than the registry being down (`docker system df`, then
+`docker builder prune`).
 
 `@file` is handled by `tert`, not by the harness. The file is read, and its text
 is inlined into the question under `Attached:`; a binary is named and skipped, and

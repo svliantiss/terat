@@ -12,16 +12,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN useradd -m -s /bin/zsh testuser && mkdir -p /home/dev/.local && chown -R testuser /home/dev
 USER testuser
 ENV PATH=/home/dev/.local/bin:/usr/local/bin:/usr/bin:/bin
-RUN npm config set prefix /home/dev/.local
+# Six global installs is six chances for the registry to drop a connection, and a
+# build that fails on that looks exactly like a broken Dockerfile. Retry it here
+# rather than in every caller's head.
+RUN npm config set prefix /home/dev/.local \
+	&& npm config set fetch-retries 5 \
+	&& npm config set fetch-retry-maxtimeout 120000
 RUN npm i -g @earendil-works/pi-coding-agent
 RUN npm i -g opencode-ai
 RUN npm i -g @anthropic-ai/claude-code
 RUN npm i -g @openai/codex
 RUN npm i -g @vibe-kit/grok-cli
-# dsh publishes only pre-releases, which `npm i -g <pkg>` cannot resolve, and
-# an older tag installs a tree whose plugins disagree: pinning 0.1.5-rc.2 pulls
-# dsh-base 0.1.5-rc.3, whose dsh-sandbox-local is then absent and dsh dies at
-# boot with "plugin(s) failed to load". The rc.3 line is internally consistent.
-RUN npm i -g @deepseek-ai/dsh@0.2.2-rc.3
+# dsh publishes only pre-releases, which `npm i -g <pkg>` cannot resolve, and the
+# tag has to be chosen carefully: 0.1.5-rc.2 pulls a newer dsh-base whose
+# dsh-sandbox-local is then absent, so dsh dies at boot with "plugin(s) failed to
+# load" before it ever reads a key, and 0.2.2-rc.3 requires node >= 24.9, which
+# no longer matches this image. 0.1.5-rc.3 is the line that agrees with itself on
+# node 22: dsh, dsh-base and dsh-sandbox-local are all the same version.
+RUN npm i -g @deepseek-ai/dsh@0.1.5-rc.3
 
 RUN for c in pi opencode claude codex grok dsh; do command -v $c || echo "MISSING $c"; done

@@ -90,6 +90,11 @@ printf 'the code is TANGERINE\n' >/tmp/code.txt
 
 row() {
 	name=$1; cmd=$2; want=$3
+	# Every row gets its own thread. tert keys the thread on $PPID, which is the
+	# same for every row here, so without this each harness would inherit the
+	# questions asked of the ones before it and could answer those instead.
+	export TERAT_THREAD=/tmp/thread.$name
+	rm -f "$TERAT_THREAD"
 	ans=$(TERAT_CMD="$cmd" ~/P/tert "Reply with exactly: $want" </dev/null 2>&1 | tail -1)
 	case $ans in *"$want"*) v=ok ;; *) v=FAIL ;; esac
 	printf '  %-9s %-4s %s\n' "$name" "$v" "$(printf '%s' "$ans" | cut -c1-54)"
@@ -97,6 +102,7 @@ row() {
 	# is what inlining buys: @file used to work only where the harness itself
 	# understood the syntax.
 	if [ "${4:-}" != nofile ]; then
+		rm -f "$TERAT_THREAD"
 		ans=$(TERAT_CMD="$cmd" ~/P/tert 'what is the code? one word only' @/tmp/code.txt </dev/null 2>&1 | tail -1)
 		case $ans in
 		*TANGERINE*) af=ok ;;
