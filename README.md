@@ -98,7 +98,7 @@ json alike, which is what makes the contract worth stating.
 | `claude -p` | yes | yes | reads `@file` itself |
 | `codex exec` | yes | no | needs `wire_api = "responses"` |
 | `grok -p` | wrapper | no | prints the transcript; needs a filter |
-| `dsh --profile headless` | no | no | wants its own DeepSeek key |
+| `dsh --profile headless` | no | no | wants its own DeepSeek key and a sandbox |
 
 `@file` on a harness that does not understand it is *silently* useless: the
 model is handed a path it cannot open and says so. Only attach files to `pi`,
@@ -125,9 +125,31 @@ local router does not serve, and a patch layer does not override it. Give it a
 real `DEEPSEEK_API_KEY` and it should work unchanged; without one it stops at
 `MISSING_CREDENTIAL`.
 
+All of the above was verified twice in a container as well as on this machine,
+forwards and backwards, with no configuration left over between runs:
+
+```sh
+docker build -f test/D.harness -t terat-harness:all test   # one npm package each
+ROUTER_KEY=... IMAGE=terat-harness:all \
+  docker run --rm --add-host=host.docker.internal:host-gateway \
+    -e ROUTER_KEY -v "$PWD":/src:ro -v "$PWD/test/harnesses.sh":/h.sh:ro \
+    terat-harness:all sh /h.sh 1
+```
+
+One trap worth knowing before wiring a harness in: **do not export
+`ANTHROPIC_API_KEY` or `OPENAI_API_KEY` while using `pi`.** pi sees either and
+stops reading its own `models.json`, then calls that provider directly and fails
+— and because the failure arrives as a `stopReason: "error"` inside an assistant
+message, it used to surface as `no answer (the run ended without a reply)`.
+`tert` now quotes the harness, so you get `401 ... invalid x-api-key` instead.
+Scope a credential to the harness that needs it, as the samples above do.
+
+`dsh` also needs a working sandbox plugin inside the container: without one it
+dies at boot with `plugin(s) failed to load: @deepseek-ai/dsh-sandbox-local`
+before it ever reads a key.
+
 Tested and not usable: `cursor-agent` needs a Cursor account and draws a TUI;
-`dsh` takes its task as an argument and wants its own key; `gemini` wants a
-Google key and has no OpenAI-compatible mode; `aider` failed on an unrelated
+`gemini` wants a Google key and has no OpenAI-compatible mode; `aider` failed on an unrelated
 scipy build; `sgpt` ships without its `click` dependency; `mods` would not
 accept a custom endpoint. `goose` on Homebrew is a database-migration tool, and
 `cc` is a compiler.

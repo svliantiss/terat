@@ -1,0 +1,22 @@
+# Every harness terat supports, installed the way a fresh machine would:
+# one npm package each, no config and no credential in the image.
+# Build:  docker build -f test/D.harness -t terat-harness:all test
+FROM node:22-bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+	tmux curl ca-certificates git \
+	&& rm -rf /var/lib/apt/lists/*
+
+RUN useradd -m -s /bin/zsh testuser && mkdir -p /home/dev/.local && chown -R testuser /home/dev
+USER testuser
+ENV PATH=/home/dev/.local/bin:/usr/local/bin:/usr/bin:/bin
+RUN npm config set prefix /home/dev/.local
+RUN npm i -g @earendil-works/pi-coding-agent
+RUN npm i -g opencode-ai
+RUN npm i -g @anthropic-ai/claude-code
+RUN npm i -g @openai/codex
+RUN npm i -g @vibe-kit/grok-cli
+# dsh publishes only a pre-release, which `npm i -g <pkg>` cannot resolve.
+RUN npm i -g @deepseek-ai/dsh@0.1.5-rc.2
+
+RUN for c in pi opencode claude codex grok dsh; do command -v $c || echo "MISSING $c"; done
