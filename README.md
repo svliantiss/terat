@@ -67,7 +67,29 @@ tert: install it, or point TERAT_CMD at another harness
 ```
 
 `TERAT_CMD` is the general form: anything that takes the question on stdin and
-writes the answer on stdout can stand in for pi.
+writes the answer on stdout can stand in for pi. Claude Code works this way:
+
+```sh
+TERAT_CMD='claude -p' tert 'why is the build failing?'
+```
+
+It follows the same contract — question on stdin, answer on stdout — and exits
+when it is done, so the wait is exact. Set `TERAT_NAME=Claude` if you would
+rather the label read `Claude:` than `Pi:`. Its own `@file` handling means the
+attachments terat passes on the command line work unchanged.
+
+A harness that wants the question as an *argument* rather than on stdin needs a
+one-line wrapper, because that is a different contract:
+
+```sh
+#!/bin/sh
+exec some-agent --task "$(cat)"
+```
+
+Verified against real models: `pi` and `claude` both answer through the prompt,
+piped and on a tty, with tracing. `cursor-agent` needs a Cursor account and
+draws a TUI; `dsh` takes its task as an argument and wants its own key. `goose`
+is a database-migration tool and `cc` is a compiler — neither is a harness.
 
 Sourcing `terat.zsh` is the whole install for ask mode: it runs the `tert` that
 sits beside it, so the symlink is only needed if you want to type `tert` at the

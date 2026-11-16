@@ -54,14 +54,26 @@ else
 	note=no-tmux
 fi
 
-# 4. with no pi installed the failure is explained, not a shell error
+# 4. a plain-text harness works too: no json events, no agent_end, answer on
+#    stdout. This is the claude/cursor/dsh shape, and it must not need pi.
+cat > ~/.local/bin/plainh <<'SH'
+#!/bin/sh
+cat >/dev/null
+printf '   PLAIN_TEXT_ANSWER\n'
+SH
+chmod +x ~/.local/bin/plainh
+ans=$(cd /tmp && TERAT_CMD=plainh tert 'q' </dev/null 2>&1)
+[ "$ans" = "   PLAIN_TEXT_ANSWER" ] ||
+	fail "plain-text harness answered [$ans]"
+
+# 5. with no pi installed the failure is explained, not a shell error
 err=$(cd /tmp && PATH=/usr/bin:/bin TERAT_CMD= ~/Projects/terat/tert q </dev/null 2>&1)
 case $err in
 *"pi is not installed"*) ;;
 *) fail "missing-pi message was [$err]" ;;
 esac
 
-# 5. the transcript actually reaches the question: a question can only be
+# 6. the transcript actually reaches the question: a question can only be
 #    answered from the shell's own history if the history is sent.
 if command -v tmux >/dev/null 2>&1; then
 	cat > ~/.local/bin/pi <<'SH'

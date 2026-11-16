@@ -480,6 +480,19 @@ if [ ! -s "$tmp" ]; then
 fi
 
 ans=$(answer <"$tmp")
+# A harness that pads its output is not starting the answer with whitespace.
+# Blank lines before it are noise; the indentation of the first real line is
+# not, because that is how a code block begins.
+ans=$(printf '%s\n' "$ans" | awk 'f { print; next } NF { f = 1; print }')
+# The label supplies one space, so do not add a second when the answer brings
+# its own. The answer itself is printed exactly as it arrived.
+label() {
+	case ${ans%%[![:space:]]*} in
+	'') printf '%s: %s\n' "${TERAT_NAME:-Pi}" "$ans" ;;
+	*) printf '%s:%s\n' "${TERAT_NAME:-Pi}" "$ans" ;;
+	esac
+}
+
 # Events came back but nobody spoke: the run failed, or it only used tools. Say
 # so; do not print markup or an empty answer as though it were a reply.
 if [ -z "$ans" ]; then
@@ -536,9 +549,9 @@ if [ -t 1 ]; then
 	# pipe still runs, and nothing comes out the other end. Print unwrapped
 	# instead — a long line is a cosmetic problem, a missing answer is not.
 	if command -v fold >/dev/null 2>&1; then
-		printf '%s: %s\n' "${TERAT_NAME:-Pi}" "$ans" | fold -s -w $((cols - 1))
+		label | fold -s -w $((cols - 1))
 	else
-		printf '%s: %s\n' "${TERAT_NAME:-Pi}" "$ans"
+		label
 	fi
 else
 	printf '%s\n' "$ans"
