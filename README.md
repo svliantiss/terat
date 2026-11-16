@@ -710,7 +710,32 @@ Only `pi` is exercised by this project's own tests. The others are supported in
 the sense that the contract is plain and the failure modes are visible, not in
 the sense that each one has been verified end to end here.
 
+## Tests
+
+`test/run.sh` installs terat into a container per distro — an empty home, no
+`~/.zshrc`, nothing inherited — and asserts the claims that matter:
+
+```sh
+sh test/run.sh                # every distro
+sh test/run.sh debian alpine  # a subset
+```
+
+bookworm, Ubuntu, Fedora, Alpine, Amazon Linux, bullseye (zsh 5.8) and Arch
+(zsh 5.9.2, amd64 under emulation). Per distro: it parses under that `sh`,
+`zsh` and `awk`; a question gets an answer; piped output stays raw; the prompt
+becomes `🟅` through a real pty; the transcript reaches the question; and a
+missing `pi` is explained instead of relaying a shell error.
+
+The suite is falsified on purpose: delete the transcript line or the glyph
+fallback and it goes red, so a green run means something. Build failures are
+printed rather than skipped, because a distro that never built otherwise looks
+like a pass.
+
+`test/real-pi.md` covers running it against the real `pi` in a container.
+
 ## Rules
+
+
 
 - A failed call prints to stderr and exits non-zero; nothing is written to the
   thread and nothing pretends to be an answer.
