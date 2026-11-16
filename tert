@@ -342,6 +342,9 @@ run_harness() {
 	unset _carry
 	for _a in $pi_cmd; do
 		if [ "$_a" = '{}' ]; then
+			# Two placeholders in a row would otherwise overwrite the first
+			# instead of inserting it, quietly losing an argument.
+			[ -n "${_carry+x}" ] && set -- "$@" "$_carry"
 			_carry="$prompt"
 		elif [ -n "${_carry+x}" ]; then
 			set -- "$@" "$_carry"

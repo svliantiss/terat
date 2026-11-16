@@ -144,6 +144,14 @@ case $out in
 *) fail "the {} placeholder did not pass the question as one argument: [$out]" ;;
 esac
 
+# 11. two placeholders each get the question. Adjacent ones used to overwrite
+#     each other, which silently dropped an argument rather than failing.
+out=$(cd /tmp && TERAT_CMD='taskcli {} {}' tert 'Q' </dev/null 2>&1 | sed -n 's/^argc=//p')
+case $out in
+2) ;;
+*) fail "two {} placeholders did not each insert the question (argc=$out)" ;;
+esac
+
 # 6. with no pi installed the failure is explained, not a shell error
 err=$(cd /tmp && PATH=/usr/bin:/bin TERAT_CMD= ~/Projects/terat/tert q </dev/null 2>&1)
 case $err in

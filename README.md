@@ -112,8 +112,21 @@ TERAT_CMD='grok -p {}' tert 'what changed in this diff?'
 TERAT_CMD='dsh --profile headless {}' tert 'why is the build failing?'
 ```
 
+The argument is the whole transcript — the question, any earlier turns, and any
+attached files — because a task-style CLI takes a single prompt string and there
+is nowhere else to put them. It is one argument no matter how many words or
+newlines it has, and nothing in it is executed.
+
 Without the placeholder the command is run exactly as written and the question
 arrives on stdin, so nothing changes for a harness that reads it the usual way.
+`TERAT_CMD` itself is word-split, so a command living at a path with spaces in
+it needs a wrapper on `PATH` rather than quotes.
+
+Authors' note: the trap in this whole area is that a harness which does not
+understand how it is being called still *starts*, and fails in a way that looks
+like terat. `grok -p` with no argument prints "option '-p, --prompt <prompt>'
+argument missing", and a pipe of stdin to it is silently discarded; `dsh` says
+"a task is required". Neither reads stdin, and neither says so in its help text.
 
 ### Wiring each one in
 
