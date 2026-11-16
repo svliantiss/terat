@@ -532,7 +532,14 @@ if [ -t 1 ]; then
 	# that line from running one label too wide. Stop a column short: a line
 	# that fills the last column leaves the terminal holding a pending wrap,
 	# and the newline then opens a blank line in the middle of the answer.
-	printf '%s: %s\n' "${TERAT_NAME:-Pi}" "$ans" | fold -s -w $((cols - 1))
+	# `fold` is external. In a pipeline its absence swallows the answer: the
+	# pipe still runs, and nothing comes out the other end. Print unwrapped
+	# instead — a long line is a cosmetic problem, a missing answer is not.
+	if command -v fold >/dev/null 2>&1; then
+		printf '%s: %s\n' "${TERAT_NAME:-Pi}" "$ans" | fold -s -w $((cols - 1))
+	else
+		printf '%s: %s\n' "${TERAT_NAME:-Pi}" "$ans"
+	fi
 else
 	printf '%s\n' "$ans"
 fi
