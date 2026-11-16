@@ -46,14 +46,47 @@ network.
 
 ## Install
 
+`terat` is a shell script and a zsh file; there is nothing to build. It needs
+zsh, and it needs `pi` on `PATH`, because pi is what answers the question.
+Nothing else is required — `awk`, `grep`, `od` and `date` are already on any
+Unix, and the pty relay uses `script`, which ships with macOS and util-linux
+(see [When `script` is missing](#when-script-is-missing)).
+
 ```sh
 ln -sf $PWD/tert ~/.local/bin/tert   # optional: for typing `tert` yourself
 echo "source $PWD/terat.zsh" >> ~/.zshrc   # zsh ask mode
 ```
 
+If `pi` is not installed, `tert` says so and exits rather than relaying a shell
+error:
+
+```
+🟅 hello
+tert: pi is not installed, and it is what answers the question
+tert: install it, or point TERAT_CMD at another harness
+```
+
+`TERAT_CMD` is the general form: anything that takes the question on stdin and
+writes the answer on stdout can stand in for pi.
+
 Sourcing `terat.zsh` is the whole install for ask mode: it runs the `tert` that
 sits beside it, so the symlink is only needed if you want to type `tert` at the
 prompt yourself.
+
+### When `script` is missing
+
+Capture needs `script` to give the command a pty. Debian, Ubuntu, macOS and util-linux
+distributions have it. **Alpine does not** — busybox has no `script` applet, and
+the package is not pulled in by `util-linux`'s default split:
+
+```sh
+apk add util-linux-misc    # provides /usr/bin/script on Alpine
+```
+
+Without it `terat` still works — the prompt, ask mode, `!`, the transcript and
+the answers are all fine — but captured output is empty, because there is no pty
+to copy from. It fails quietly (verified: no error on the prompt), so on such a
+machine capture is simply off rather than broken.
 
 ### As your shell
 

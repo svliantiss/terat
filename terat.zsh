@@ -115,9 +115,16 @@ _terat_tui() {
 #   precmd  -> fd 1/2 become the tty   (the prompt and typing are live)
 _terat_pty() {
 	setopt localoptions
+	# No `script` binary means no pty and so no capture. Fail quietly and let
+	# the caller fall back to the plain relay; without this the shell printed
+	# "no such file or directory: .../terat.<pid>.raw.pid" over the prompt on
+	# every command, which reads as a broken install.
+	[[ -n ${commands[script]-} ]] || return 1
 	local slv=$TERAT_RAW.slv pidf=$TERAT_RAW.pid
 	rm -f "$slv" "$pidf"
-	# `script` owns the pty: it ships with macOS, util-linux and busybox. Its
+	# `script` owns the pty. macOS and util-linux have it; Alpine's busybox
+	# does NOT, which is why a caller must cope with this failing.
+	# Its
 	# stdin must not be our terminal, or `script` calls tcsetattr on it and a
 	# start from the background stops it with SIGTTOU. Echo is off or every
 	# line is copied twice. The child must only *hold* the pty open, never read
@@ -142,7 +149,7 @@ _terat_pty() {
 		_terat_resize
 		return 0
 	fi
-	_terat_relay=$(<$pidf 2>/dev/null)   # the child started: still reap it
+	[[ -s $pidf ]] && _terat_relay=$(<$pidf)   # the child started: still reap it
 	kill ${_terat_relay:-$job} 2>/dev/null
 	_terat_relay=0
 	rm -f "$slv" "$pidf"
@@ -249,7 +256,17 @@ else
 	_terat_prompt_text() { print -rn -- "$PROMPT" }
 	_terat_glyph() {
 		PROMPT=$_terat_plain
-		(( TERAT_MODE )) && PROMPT=${PROMPT//$TERAT_GLYPH/$TERAT_SYMBOL}
+		(( TERAT_MODE )) || return 0
+		# The swap only works if the prompt already carries the glyph, which
+		# starship's does and a stock zsh prompt (`%m%# `) does not. Without
+		# this fallback AI mode looked exactly like a normal prompt on any
+		# machine with no prompt framework — a fresh container, a bare VPS —
+		# and nothing said whether the line would be a question or a command.
+		if [[ $PROMPT == *$TERAT_GLYPH* ]]; then
+			PROMPT=${PROMPT//$TERAT_GLYPH/$TERAT_SYMBOL}
+		else
+			PROMPT="$TERAT_SYMBOL "
+		fi
 	}
 fi
 

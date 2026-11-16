@@ -56,6 +56,17 @@ mkdir -p "${thread%/*}" 2>/dev/null
 # guessed, and no run is cut off in the middle of doing something.
 pi_cmd=${TERAT_CMD:-pi -p --mode json}
 
+# The one prerequisite: the harness itself. Say so plainly, because the failure
+# it causes is a shell error ("pi: not found") followed by "no answer", which
+# reads like terat is broken rather than missing nothing at all. Only checked
+# for the default command: TERAT_CMD is the caller's business, and a path that
+# does not exist yet is a legitimate thing to test.
+if [ -z "${TERAT_CMD:-}" ] && ! command -v pi >/dev/null 2>&1; then
+	printf 'tert: pi is not installed, and it is what answers the question\n' >&2
+	printf 'tert: install it, or point TERAT_CMD at another harness\n' >&2
+	exit 127
+fi
+
 # Trace propagation, off unless TERAT_TRACE_ID is set.
 #
 # pi does not emit W3C trace context, so without this the question, the model
