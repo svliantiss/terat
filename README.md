@@ -75,78 +75,94 @@ TERAT_CMD='claude -p' tert 'why is the build failing?'
 
 It follows the same contract — question on stdin, answer on stdout — and exits
 when it is done, so the wait is exact. Set `TERAT_NAME=Claude` if you would
-rather the label read `Claude:` than `Pi:`. Its own `@file` handling means the
-attachments terat passes on the command line work unchanged.
+rather the label read `Claude:` than `Pi:`.
 
-A harness that wants the question as an *argument* rather than on stdin needs a
-one-line wrapper, because that is a different contract:
+A harness that wants the question as an *argument* instead of on stdin needs no
+wrapper: put `{}` where the question goes and `tert` fills it in (see [harnesses
+that want the question as an argument](#harnesses-that-want-the-question-as-an-argument)).
 
-```sh
-#!/bin/sh
-exec some-agent --task "$(cat)"
-```
-
-Verified against real models, through the prompt: `pi`, `claude -p`,
-`llm -m <model>`, `aichat`, and `qwen -p` all answer, piped and on a tty, with
-the glyph and the label and tracing. That is five harnesses, plain-text and
-json alike, which is what makes the contract worth stating.
-
-| harness | answers | `@file` | how |
+| harness | answers | `@file` | `TERAT_CMD` |
 |---|---|---|---|
-| `pi -p --mode json` | yes | yes | the default |
-| `opencode run` | yes | yes | needs a provider in `opencode.json` |
-| `claude -p` | yes | yes | reads `@file` itself |
-| `codex exec` | yes | no | needs `wire_api = "responses"` |
-| `grok -p` | wrapper | no | prints the transcript; needs a filter |
-| `dsh --profile headless` | no | no | wants its own DeepSeek key and a sandbox |
+| `pi` | yes | yes | `pi -p --mode json` (the default) |
+| `opencode` | yes | yes | `opencode run` |
+| `claude` | yes | yes | `claude -p` (see the wrapper below) |
+| `codex` | yes | yes | `codex exec --skip-git-repo-check` |
+| `grok` | yes | yes | `grok -p {}` |
+| `dsh` | yes | yes | `dsh --profile headless {}` |
 
-`@file` on a harness that does not understand it is *silently* useless: the
-model is handed a path it cannot open and says so. Only attach files to `pi`,
-`opencode` or `claude`.
+All six are verified answering *and* reading an attached file, in a container and
+on a laptop, twice each and in both orders: `sh test/harnesses.sh 1` and `2`.
 
-Two of these need more than a `TERAT_CMD`, and both for the same reason — they
-want the prompt as an argument, not on stdin:
+`@file` is handled by `tert`, not by the harness. The file is read, and its text
+is inlined into the question under `Attached:`; a binary is named and skipped, and
+`TERAT_ATTACH_MAX` (default 200000 bytes) caps the total. This is the one place a
+little of the terminal's own reading is worth doing: passing `@path` through only
+works on a harness that understands it, and on one that does not the model is
+handed a path it cannot open and answers about the path instead of the file.
+
+### Harnesses that want the question as an argument
+
+`grok -p` and `dsh --profile headless` will not read the question from stdin:
+they take it as an argument, and refuse to start otherwise. Put `{}` in
+`TERAT_CMD` and the question goes there instead, as a single argument, with
+spaces and shell syntax intact:
 
 ```sh
-# grok-cli takes the prompt as argv and prints the transcript as json lines.
-cat > ~/.local/bin/grok-ask <<'SH'
+TERAT_CMD='grok -p {}' tert 'what changed in this diff?'
+TERAT_CMD='dsh --profile headless {}' tert 'why is the build failing?'
+```
+
+Without the placeholder the command is run exactly as written and the question
+arrives on stdin, so nothing changes for a harness that reads it the usual way.
+
+### Wiring each one in
+
+```sh
+# codex: 0.169 rejects wire_api = "chat" outright and speaks only the responses
+# API. In ~/.codex/config.toml:
+#   model = "<model>"
+#   model_provider = "myrouter"
+#   [model_providers.myrouter]
+#   name = "myrouter"
+#   base_url = "https://.../v1"
+#   env_key = "ROUTER_KEY"
+#   wire_api = "responses"
+
+# claude is an Anthropic-shaped client, so it needs its own base URL and key and
+# a model id the endpoint actually serves. Keep them in a two-line wrapper so
+# they are scoped to claude and not exported into everything else:
+cat > ~/.local/bin/claude-ask <<'SH'
 #!/bin/sh
-exec grok -p "$(cat)" 2>/dev/null | sed -n 's/^{"role":"assistant","content":"\(.*\)"}$/\1/p' | tail -1
+ANTHROPIC_BASE_URL=https://... ANTHROPIC_API_KEY=$ROUTER_KEY \
+	exec claude -p --model <model> "$@"
 SH
-TERAT_CMD=grok-ask tert 'what changed in this diff?'
 
-# codex needs wire_api = "responses" in ~/.codex/config.toml; "chat" is rejected.
-TERAT_CMD='codex exec --skip-git-repo-check' tert 'why is the build failing?'
+# dsh reads its provider from the profile patch layer. Note that DSH_HOME is not
+# always ~/.dsh (on macOS this build uses
+# "~/Library/Application Support/gnts.dev/harness"), and edit the profile there:
+#   - id: llm-pi-ai
+#     config:
+#       providers:
+#         myrouter:
+#           apiKeyEnv: ROUTER_KEY
+#           api: openai-completions
+#           baseURL: https://.../v1
+#           models: [{ id: <model> }]
+#   - id: agent-default-model
+#     config: { provider: myrouter, model: <model> }
 ```
 
-`dsh` has the right shape on paper — "print the final assistant message and
-exit" — but its headless profile pins `deepseek-official` and a model id the
-local router does not serve, and a patch layer does not override it. Give it a
-real `DEEPSEEK_API_KEY` and it should work unchanged; without one it stops at
-`MISSING_CREDENTIAL`.
+Two traps that cost an afternoon each:
 
-All of the above was verified twice in a container as well as on this machine,
-forwards and backwards, with no configuration left over between runs:
-
-```sh
-docker build -f test/D.harness -t terat-harness:all test   # one npm package each
-ROUTER_KEY=... IMAGE=terat-harness:all \
-  docker run --rm --add-host=host.docker.internal:host-gateway \
-    -e ROUTER_KEY -v "$PWD":/src:ro -v "$PWD/test/harnesses.sh":/h.sh:ro \
-    terat-harness:all sh /h.sh 1
-```
-
-One trap worth knowing before wiring a harness in: **do not export
-`ANTHROPIC_API_KEY` or `OPENAI_API_KEY` while using `pi`.** pi sees either and
-stops reading its own `models.json`, then calls that provider directly and fails
-— and because the failure arrives as a `stopReason: "error"` inside an assistant
-message, it used to surface as `no answer (the run ended without a reply)`.
-`tert` now quotes the harness, so you get `401 ... invalid x-api-key` instead.
-Scope a credential to the harness that needs it, as the samples above do.
-
-`dsh` also needs a working sandbox plugin inside the container: without one it
-dies at boot with `plugin(s) failed to load: @deepseek-ai/dsh-sandbox-local`
-before it ever reads a key.
+- **Do not export `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` while using `pi`.**
+  pi sees either and stops reading its own `models.json`, then calls that
+  provider directly and fails. Scope the credential to the harness that needs
+  it, as the samples above do.
+- **A dsh install can be internally inconsistent.** `npm i -g @deepseek-ai/dsh`
+  cannot resolve a pre-release at all, and pinning an old one (0.1.5-rc.2) pulls
+  a *newer* `dsh-base` whose `dsh-sandbox-local` is then missing: dsh dies at
+  boot with `plugin(s) failed to load` before it ever reads a key. Install a
+  line that agrees with itself, e.g. `@deepseek-ai/dsh@0.2.2-rc.3`.
 
 Tested and not usable: `cursor-agent` needs a Cursor account and draws a TUI;
 `gemini` wants a Google key and has no OpenAI-compatible mode; `aider` failed on an unrelated

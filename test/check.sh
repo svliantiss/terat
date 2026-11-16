@@ -114,6 +114,36 @@ case $out in
 *) fail "a harness that answered was rejected as failed: [$out]" ;;
 esac
 
+# 9. an attachment is inlined, so a harness with no @file support still sees the
+#    file. Only some harnesses understand @path; a path handed to one that does
+#    not is silently useless, and the model answers about the path.
+printf 'the code is TANGERINE\n' >/tmp/attach.txt
+cat > ~/.local/bin/echoall <<'SH'
+#!/bin/sh
+cat
+SH
+chmod +x ~/.local/bin/echoall
+out=$(cd /tmp && TERAT_CMD=echoall tert 'what is the code?' @attach.txt </dev/null 2>&1)
+case $out in
+*TANGERINE*) ;;
+*) fail "an @file was not inlined for the harness: [$out]" ;;
+esac
+
+# 10. a task-style harness (grok -p, dsh --profile headless) refuses stdin, so
+#     `{}` puts the question on the command line instead. It must arrive as one
+#     argument, with spaces and shell syntax intact and not executed.
+cat > ~/.local/bin/taskcli <<'SH'
+#!/bin/sh
+printf 'argc=%s\n' "$#"
+for a in "$@"; do printf 'ARG[%s]\n' "$a"; done
+SH
+chmod +x ~/.local/bin/taskcli
+out=$(cd /tmp && TERAT_CMD='taskcli --flag {} --tail' tert 'say "hi" && echo $HOME' </dev/null 2>&1)
+case $out in
+*'ARG[--flag]'*'Question: say "hi" && echo $HOME'*'ARG[--tail]'*) ;;
+*) fail "the {} placeholder did not pass the question as one argument: [$out]" ;;
+esac
+
 # 6. with no pi installed the failure is explained, not a shell error
 err=$(cd /tmp && PATH=/usr/bin:/bin TERAT_CMD= ~/Projects/terat/tert q </dev/null 2>&1)
 case $err in

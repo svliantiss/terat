@@ -57,26 +57,53 @@ env_key = "ROUTER_KEY"
 wire_api = "responses"
 EOF
 
-# grok takes the prompt as argv and prints the transcript as json lines.
-# Written with printf so the sed pattern keeps its backslashes exactly, which a
-# heredoc or a double-quoted string would eat one layer at a time.
-{
-	printf '#!/bin/sh\n'
-	printf 'GROK_API_KEY=%s GROK_BASE_URL=%s/v1 GROK_MODEL=%s \\\n' "$K" "$H" "$M"
-	printf '\tgrok -p "$(cat)" 2>/dev/null \\\n'
-	printf '%s\n' "	| sed -n 's/^{\"role\":\"assistant\",\"content\":\"\\(.*\\)\"}\$/\\1/p' | tail -1"
-} > ~/.local/bin/grok-ask
-chmod +x ~/.local/bin/claude-ask ~/.local/bin/grok-ask
+# dsh needs a provider route and a default model in its profile patch layer, and
+# its DSH_HOME defaults to ~/.dsh where it is not set. Both grok and dsh take the
+# question as an argv argument rather than stdin, which is what `{}` in
+# TERAT_CMD is for: no wrapper script is needed for either.
+mkdir -p ~/.dsh/profiles/headless
+cat > ~/.dsh/profiles/headless/cordis.patch.yml <<EOF
+- id: llm-pi-ai
+  config:
+    providers:
+      router:
+        displayName: router
+        apiKeyEnv: ROUTER_KEY
+        api: openai-completions
+        baseURL: $H/v1
+        models:
+          - id: $M
+            name: DeepSeek V4.1 Flash
+- id: agent-default-model
+  config:
+    provider: router
+    model: $M
+EOF
 
+chmod +x ~/.local/bin/claude-ask
+export GROK_API_KEY="$K" GROK_BASE_URL="$H/v1" GROK_MODEL="$M"
 mkdir -p ~/P && cp -R /src/. ~/P/ && chmod +x ~/P/tert
 export ROUTER_KEY="$K"
 cd /tmp/w
+
+printf 'the code is TANGERINE\n' >/tmp/code.txt
 
 row() {
 	name=$1; cmd=$2; want=$3
 	ans=$(TERAT_CMD="$cmd" ~/P/tert "Reply with exactly: $want" </dev/null 2>&1 | tail -1)
 	case $ans in *"$want"*) v=ok ;; *) v=FAIL ;; esac
 	printf '  %-9s %-4s %s\n' "$name" "$v" "$(printf '%s' "$ans" | cut -c1-54)"
+	# The same harness must also see a file it is never given a path to, which
+	# is what inlining buys: @file used to work only where the harness itself
+	# understood the syntax.
+	if [ "${4:-}" != nofile ]; then
+		ans=$(TERAT_CMD="$cmd" ~/P/tert 'what is the code? one word only' @/tmp/code.txt </dev/null 2>&1 | tail -1)
+		case $ans in
+		*TANGERINE*) af=ok ;;
+		*) af=FAIL ;;
+		esac
+		printf '  %-9s %-4s %s\n' "" "" "@file $af"
+	fi
 }
 
 echo "  distro: $(. /etc/os-release 2>/dev/null; echo "${PRETTY_NAME:-unknown}")"
@@ -88,13 +115,49 @@ if [ "${1:-1}" = 1 ]; then
 	row opencode 'opencode run'                       R1
 	row claude   'claude-ask'                         R1
 	row codex    'codex exec --skip-git-repo-check'   R1
-	row grok     'grok-ask'                           R1
-	row dsh      'dsh --profile headless'             R1
+	row grok     'grok -p {}'                         R1
+	row dsh      'dsh --profile headless {}'          R1
 else
-	row dsh      'dsh --profile headless'             R2
-	row grok     'grok-ask'                           R2
+	row dsh      'dsh --profile headless {}'          R2
+	row grok     'grok -p {}'                         R2
 	row codex    'codex exec --skip-git-repo-check'   R2
 	row claude   'claude-ask'                         R2
 	row opencode 'opencode run'                       R2
 	row pi       'pi -p --mode json'                  R2
+fi
+
+# The piped path is only half the product. Drive one harness through the real
+# prompt: the line becomes the glyph, the answer comes back labelled, and the
+# prompt is ready again for the next question.
+if [ "${TTYCMD:-}" != none ] && command -v tmux >/dev/null 2>&1 &&
+	command -v zsh >/dev/null 2>&1; then
+	ptycmd=${TTYCMD:-pi -p --mode json}
+	rm -f ~/.zshrc
+	touch ~/.zshrc
+	{
+		echo "export PATH=$HOME/.local/bin:\$PATH"
+		echo "export TERAT_CMD='$ptycmd'"
+		echo "export ROUTER_KEY=$ROUTER_KEY"
+		echo "export GROK_API_KEY=${GROK_API_KEY:-} GROK_BASE_URL=${GROK_BASE_URL:-} GROK_MODEL=${GROK_MODEL:-}"
+		echo "source ~/P/terat.zsh"
+	} >>~/.zshrc
+	tmux kill-server 2>/dev/null
+	tmux new-session -d -s P -x 100 -y 24 "zsh -i"
+	i=0
+	while [ $i -lt 30 ]; do
+		sleep 1
+		tmux capture-pane -pt P 2>/dev/null | grep -q '%' && break
+		i=$((i + 1))
+	done
+	tmux send-keys -t P '@Reply with exactly: PTYOK' Enter
+	i=0
+	while [ $i -lt 120 ]; do
+		sleep 1
+		tmux capture-pane -pt P 2>/dev/null | grep -q 'Pi: PTYOK' && break
+		i=$((i + 1))
+	done
+	echo
+	echo '  pty:'
+	tmux capture-pane -pt P 2>/dev/null | grep -E '🟅|Pi:|tert:' | tail -3 | sed 's/^/    /'
+	tmux kill-server 2>/dev/null
 fi

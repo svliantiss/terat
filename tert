@@ -65,6 +65,16 @@ mkdir -p "${thread%/*}" 2>/dev/null
 # guessed, and no run is cut off in the middle of doing something.
 pi_cmd=${TERAT_CMD:-pi -p --mode json}
 
+# Some harnesses will not read the question from stdin: grok's -p demands it as
+# an argument, and so does dsh in headless mode. Rather than make every such
+# user write a wrapper script, `{}` in TERAT_CMD means "the question goes here".
+# Without the placeholder the command is left exactly as given, so a harness
+# that reads stdin needs to know nothing about this.
+case $pi_cmd in
+*'{}'*) q_in_argv=1 ;;
+*) q_in_argv='' ;;
+esac
+
 # The one prerequisite: the harness itself. Say so plainly, because the failure
 # it causes is a shell error ("pi: not found") followed by "no answer", which
 # reads like terat is broken rather than missing nothing at all. Only checked
@@ -144,8 +154,35 @@ done
 q=${q# }
 # A folder and a file inside it can both be named; keep one of each.
 awk '!seen[$0]++' "$tmp.files" >"$tmp.uniq" 2>/dev/null
-set --
-while IFS= read -r f; do set -- "$@" "@$f"; done <"$tmp.uniq"
+# Attachments are inlined rather than passed as @path arguments. Only some
+# harnesses understand that syntax, and a path given to one that does not is
+# silently useless: the model is told about a file it cannot open and answers
+# about the path instead of the contents. Sending the bytes works everywhere and
+# costs one read.
+: >"$tmp.attach"
+attach_total=0
+while IFS= read -r f; do
+	[ -n "$f" ] || continue
+	size=$(wc -c <"$f" 2>/dev/null | tr -d ' ')
+	size=${size:-0}
+	# Binary would corrupt the context rather than inform it, so name it and
+	# move on. A NUL byte in the first kilobyte is the portable test: `file` is
+	# not everywhere and a MIME guess is wrong more often than it is right.
+	if od -An -tx1 -N1024 "$f" 2>/dev/null | tr -d ' \n' | grep -q '00'; then
+		printf 'File: %s (binary, %s bytes, not inlined)\n' "$f" "$size" >>"$tmp.attach"
+		continue
+	fi
+	room=$(( ${TERAT_ATTACH_MAX:-200000} - attach_total ))
+	if [ "$room" -le 0 ]; then
+		printf 'File: %s (not inlined: attachment budget spent)\n' "$f" >>"$tmp.attach"
+		continue
+	fi
+	printf 'File: %s\n' "$f" >>"$tmp.attach"
+	head -c "$room" "$f" >>"$tmp.attach" 2>/dev/null
+	attach_total=$((attach_total + size))
+	[ "$size" -gt "$room" ] && printf '\n[... truncated at %s bytes]' "$room" >>"$tmp.attach"
+	printf '\n\n' >>"$tmp.attach"
+done <"$tmp.uniq"
 rm -f "$tmp.files" "$tmp.uniq"
 
 # `tert` with no question is just a shell: the same zsh you would otherwise
@@ -188,7 +225,7 @@ bye() {
 	stop_child
 	kill "$watchdog" 2>/dev/null
 	[ -t 1 ] && printf '\r\033[K\033[?25h'
-	rm -f "$tmp" "$tmp.err" "$tmp.to" "$tmp.stop" "$tmp.stopped" "$tmp.files" "$tmp.uniq"
+	rm -f "$tmp" "$tmp.err" "$tmp.to" "$tmp.stop" "$tmp.stopped" "$tmp.attach" "$tmp.files" "$tmp.uniq"
 	exit "$1"
 }
 trap 'bye 130' INT TERM
@@ -290,12 +327,43 @@ clean() {
 	'
 }
 
+# Run the harness. With `{}` in TERAT_CMD the question goes into the command
+# line instead of stdin, because grok -p and dsh --profile headless both refuse
+# to read it anywhere else; everything else keeps the plain pipe.
+run_harness() {
+	if [ -z "$q_in_argv" ]; then
+		$pi_cmd
+		return
+	fi
+	# Build the argument list without eval: the question and the file contents
+	# are arbitrary text, and word-splitting them would both mangle spaces and
+	# execute anything that looked like shell syntax.
+	prompt=$(cat)
+	unset _carry
+	for _a in $pi_cmd; do
+		if [ "$_a" = '{}' ]; then
+			_carry="$prompt"
+		elif [ -n "${_carry+x}" ]; then
+			set -- "$@" "$_carry"
+			unset _carry
+			set -- "$@" "$_a"
+		else
+			set -- "$@" "$_a"
+		fi
+	done
+	# A trailing placeholder, or several: flush whatever is still pending.
+	[ -n "${_carry+x}" ] && set -- "$@" "$_carry"
+	exec "$@"
+}
 {
 	here
 	[ -s "$thread" ] && { tail -n 200 "$thread" | clean; printf '\n'; }
 	[ -n "$out" ] && printf 'Output:\n%s\n\n' "$out"
 	printf 'Question: %s\n' "$q"
-} | $pi_cmd "$@" >"$tmp" 2>"$tmp.err" &
+	# The files the question refers to, inlined above, so that a harness with
+	# no @file support is given the same information as one with it.
+	[ -s "$tmp.attach" ] && { printf '\nAttached:\n'; cat "$tmp.attach"; }
+} | run_harness >"$tmp" 2>"$tmp.err" &
 pid=$!
 # The watchdog measures silence, not total time, and a tool that is running does
 # not count as silence.
@@ -377,7 +445,23 @@ answer() {
 			if (text != "") last = text
 		}
 		# A plain-text run (an older pi, or TERAT_CMD) has no events: keep it.
-		!/^\{/ && !/^\}/ { plain = plain $0 "\n" }
+		# grok-cli in headless mode writes the conversation as one
+		# {"role":...,"content":...} object per line, which is the same
+		# information in a different shape: take the last assistant line and
+		# drop the envelope, so the answer is the answer and not a transcript.
+		/^[[:space:]]*\{[[:space:]]*"role":"assistant"[[:space:]]*,[[:space:]]*"content":/ {
+			i = index($0, "\"content\":\"")
+			if (i > 0) {
+				t = unescape(substr($0, i + 11))
+				if (t != "") last = t
+			}
+			next
+		}
+		# Blank lines are spacing between events, not prose: counting them
+		# would let a run that emitted nothing but separators look like a
+		# plain-text answer
+		# and win over the real one.
+		NF && !/^[[:space:]]*\{[[:space:]]*"role":/ && !/^\{/ && !/^\}/ { plain = plain $0 "\n" }
 		END { if (plain != "") printf "%s", plain; else if (last != "") printf "%s\n", last }
 	'
 }
@@ -488,7 +572,7 @@ if [ ! -s "$tmp" ]; then
 		printf 'tert: no answer (the harness exited %s)\n' "$rc" >&2
 	fi
 	trace_ask
-	rm -f "$tmp" "$tmp.err" "$tmp.to" "$tmp.stop" "$tmp.stopped"
+	rm -f "$tmp" "$tmp.err" "$tmp.to" "$tmp.stop" "$tmp.stopped" "$tmp.attach"
 	exit 1
 fi
 
@@ -517,7 +601,7 @@ if [ "$rc" -ne 0 ] && [ -n "$ans" ] && [ ! -e "$tmp.stopped" ]; then
 	printf 'tert: the harness exited %s; it said:\n' "$rc" >&2
 	printf '%s\n' "$ans" >&2
 	trace_ask
-	rm -f "$tmp" "$tmp.err" "$tmp.to" "$tmp.stop" "$tmp.stopped"
+	rm -f "$tmp" "$tmp.err" "$tmp.to" "$tmp.stop" "$tmp.stopped" "$tmp.attach"
 	exit 1
 fi
 
@@ -563,7 +647,7 @@ if [ -z "$ans" ]; then
 		printf 'tert: no answer (the run ended without a reply)\n' >&2
 	fi
 	trace_ask
-	rm -f "$tmp" "$tmp.err" "$tmp.to" "$tmp.stop" "$tmp.stopped"
+	rm -f "$tmp" "$tmp.err" "$tmp.to" "$tmp.stop" "$tmp.stopped" "$tmp.attach"
 	exit 1
 fi
 
@@ -607,4 +691,4 @@ printf 'user: %s\nassistant: %s\n' "$q" "$ans" >>"$thread"
 
 # After the answer is on screen, so a slow collector delays nothing.
 trace_ask
-rm -f "$tmp" "$tmp.err" "$tmp.to" "$tmp.stop" "$tmp.stopped"
+rm -f "$tmp" "$tmp.err" "$tmp.to" "$tmp.stop" "$tmp.stopped" "$tmp.attach"
