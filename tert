@@ -105,7 +105,12 @@ if [ -n "$trace_id" ] && [ -z "${TERAT_CMD:-}" ]; then
 	????????????????) ;;
 	*) trace_span=$(printf '%016x' $$) ;;
 	esac
-	trace_ext=$(cd "$(dirname "$0")" 2>/dev/null && pwd)/terat-trace.js
+	case $0 in
+	*/*) _td=$(cd "${0%/*}" 2>/dev/null && pwd) ;;
+	*)   _td=$(pwd) ;;
+	esac
+	trace_ext=$_td/terat-trace.js
+	unset _td
 	if [ -f "$trace_ext" ]; then
 		TERAT_TRACE_ID=$trace_id TERAT_TRACE_SPAN=$trace_span \
 			export TERAT_TRACE_ID TERAT_TRACE_SPAN
@@ -390,7 +395,13 @@ trace_ask() {
 	# trace silently, which is the worst way to lose them.
 	self=$0
 	[ -L "$self" ] && self=$(readlink "$self" 2>/dev/null) && [ -n "$self" ] || self=$0
-	trace_dir=$(cd "$(dirname "$self")" 2>/dev/null && pwd)
+	# Parameter expansion, not dirname(1): that is another binary to be missing.
+	# On a stripped PATH it printed "dirname: not found" after the answer had
+	# already been printed, which reads as a failure when nothing failed.
+	case $self in
+	*/*) trace_dir=$(cd "${self%/*}" 2>/dev/null && pwd) ;;
+	*)   trace_dir=$(pwd) ;;
+	esac
 	[ -f "$trace_dir/terat-trace.awk" ] || trace_dir=.
 	# Reuse the propagated id when there is one: the whole point of exporting
 	# traceparent is that the spans and the router's ledger settle on one value,
