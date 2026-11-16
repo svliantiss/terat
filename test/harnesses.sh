@@ -58,12 +58,14 @@ wire_api = "responses"
 EOF
 
 # grok takes the prompt as argv and prints the transcript as json lines.
-cat > ~/.local/bin/grok-ask <<EOF
-#!/bin/sh
-GROK_API_KEY=$K GROK_BASE_URL=$H/v1 GROK_MODEL=$M \\
-	grok -p "\\\$(cat)" 2>/dev/null \\
-	| sed -n 's/^{"role":"assistant","content":"\\\\(.*\\\\)"}\\$/\\\\1/p' | tail -1
-EOF
+# Written with printf so the sed pattern keeps its backslashes exactly, which a
+# heredoc or a double-quoted string would eat one layer at a time.
+{
+	printf '#!/bin/sh\n'
+	printf 'GROK_API_KEY=%s GROK_BASE_URL=%s/v1 GROK_MODEL=%s \\\n' "$K" "$H" "$M"
+	printf '\tgrok -p "$(cat)" 2>/dev/null \\\n'
+	printf '%s\n' "	| sed -n 's/^{\"role\":\"assistant\",\"content\":\"\\(.*\\)\"}\$/\\1/p' | tail -1"
+} > ~/.local/bin/grok-ask
 chmod +x ~/.local/bin/claude-ask ~/.local/bin/grok-ask
 
 mkdir -p ~/P && cp -R /src/. ~/P/ && chmod +x ~/P/tert
