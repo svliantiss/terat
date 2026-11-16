@@ -40,7 +40,13 @@ ans=$(cd /tmp && tert 'q' </dev/null 2>&1)
 # 3. through a real pty the prompt becomes the glyph and the answer is labelled
 if command -v tmux >/dev/null 2>&1; then
 	touch ~/.zshrc
-	printf 'export PATH="$HOME/.local/bin:$PATH"\nsource ~/Projects/terat/terat.zsh\n' >>~/.zshrc
+	# Sourced twice on purpose. The prompt branch rewrites PROMPT on the first
+	# pass, so a second pass cannot find the binary it looked for and used to
+	# fall back to treating the prompt as a literal string — which printed the
+	# `$(...)` source instead of a prompt, losing the glyph, the colours and the
+	# ~, and landing the cursor a row off. A single source in the test could
+	# never catch that.
+	printf 'export PATH="$HOME/.local/bin:$PATH"\nsource ~/Projects/terat/terat.zsh\nsource ~/Projects/terat/terat.zsh\n' >>~/.zshrc
 	tmux new-session -d -s T -x 100 -y 30 "zsh -i"
 	# Wait for the prompt to be ready rather than guessing: under qemu a
 	# `zsh -i` start-up and a fork can both take seconds, and a fixed sleep
@@ -63,6 +69,12 @@ if command -v tmux >/dev/null 2>&1; then
 	tmux kill-server 2>/dev/null
 	grep -q '🟅' /tmp/scr.txt || fail "pty: prompt never became the glyph"
 	grep -q 'Pi:' /tmp/scr.txt || fail "pty: answer had no label"
+	# The prompt must still be a real prompt. Printing the unexpanded `$(...)`
+	# left this string on screen, which is how the double-source bug looked.
+	grep -q '_terat_render' /tmp/scr.txt && fail "pty: the prompt is printed as source, not run"
+	# `%~` unexpanded is the same bug wearing a different hat: -P is what makes
+	# the plain branch render like zle would.
+	grep -q '%~' /tmp/scr.txt && fail "pty: the prompt shows %~ instead of a path"
 	note=pty+glyph+label
 else
 	note=no-tmux

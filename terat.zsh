@@ -240,34 +240,48 @@ typeset -g _terat_relay=${_terat_relay:-0} _terat_slv=${_terat_slv:-} _terat_siz
 # wrap the binary and swap the glyph inside it. A plain PROMPT is edited in the
 # string instead. Neither branch eval's anything: with a broken PATH (no
 # starship, no fzf) prompt text must never be executed as a command.
-if [[ -n ${commands[starship]-} && $PROMPT == *${commands[starship]}* ]]; then
-	typeset -g _terat_bin=${commands[starship]}
-	PROMPT=${PROMPT//${_terat_bin}/_terat_render}
-	_terat_render() {
-		local p
-		p=$("$_terat_bin" "$@" 2>/dev/null) || p='%~ '
-		(( TERAT_MODE )) && p=${p//$TERAT_GLYPH/$TERAT_SYMBOL}
-		print -rn -- "$p"
-	}
-	_terat_prompt_text() { _terat_render prompt --terminal-width=${COLUMNS:-80} }
-	_terat_glyph() { : }
-else
-	typeset -g _terat_plain=$PROMPT
-	_terat_prompt_text() { print -rn -- "$PROMPT" }
-	_terat_glyph() {
-		PROMPT=$_terat_plain
-		(( TERAT_MODE )) || return 0
-		# The swap only works if the prompt already carries the glyph, which
-		# starship's does and a stock zsh prompt (`%m%# `) does not. Without
-		# this fallback AI mode looked exactly like a normal prompt on any
-		# machine with no prompt framework — a fresh container, a bare VPS —
-		# and nothing said whether the line would be a question or a command.
-		if [[ $PROMPT == *$TERAT_GLYPH* ]]; then
-			PROMPT=${PROMPT//$TERAT_GLYPH/$TERAT_SYMBOL}
-		else
-			PROMPT="$TERAT_SYMBOL "
-		fi
-	}
+# Decided once per shell. Sourcing this file a second time must not decide
+# again: the first pass has already rewritten PROMPT to call _terat_render, so
+# the binary it was looking for is no longer in the string. A second pass then
+# concludes "no prompt framework" and keeps the *unexpanded* `$(...)` as the
+# plain prompt, and the line prints that source code instead of a prompt: no
+# glyph, no colours, no ~, and the cursor a row off because one long literal
+# line is not what zle measured. Recommending ~/.zshrc holds this line twice is
+# not enough — it is a natural thing to end up with.
+if (( ! ${+_terat_wrapped} )); then
+	typeset -g _terat_wrapped=1
+	if [[ -n ${commands[starship]-} && $PROMPT == *${commands[starship]}* ]]; then
+		typeset -g _terat_bin=${commands[starship]}
+		PROMPT=${PROMPT//${_terat_bin}/_terat_render}
+		_terat_render() {
+			local p
+			p=$("$_terat_bin" "$@" 2>/dev/null) || p='%~ '
+			(( TERAT_MODE )) && p=${p//$TERAT_GLYPH/$TERAT_SYMBOL}
+			print -rn -- "$p"
+		}
+		_terat_prompt_text() { _terat_render prompt --terminal-width=${COLUMNS:-80} }
+		_terat_glyph() { : }
+	else
+		typeset -g _terat_plain=$PROMPT
+		# -P expands the prompt escapes (%~, %m, %#, %F{...}) the way zle would.
+		# Printing the raw string instead left a stock prompt showing a literal
+		# `%~`, which is the same class of bug as the one above.
+		_terat_prompt_text() { print -rnP -- "$PROMPT" }
+		_terat_glyph() {
+			PROMPT=$_terat_plain
+			(( TERAT_MODE )) || return 0
+			# The swap only works if the prompt already carries the glyph, which
+			# starship's does and a stock zsh prompt (`%m%# `) does not. Without
+			# this fallback AI mode looked exactly like a normal prompt on any
+			# machine with no prompt framework — a fresh container, a bare VPS —
+			# and nothing said whether the line would be a question or a command.
+			if [[ $PROMPT == *$TERAT_GLYPH* ]]; then
+				PROMPT=${PROMPT//$TERAT_GLYPH/$TERAT_SYMBOL}
+			else
+				PROMPT="$TERAT_SYMBOL "
+			fi
+		}
+	fi
 fi
 
 # --- the line editor -------------------------------------------------------
