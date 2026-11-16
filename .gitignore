@@ -4,3 +4,4 @@ wansample.sh
 test/.src/
 test/.D.*
 test/.build.log
+.aider*

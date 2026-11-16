@@ -66,14 +66,30 @@ ans=$(cd /tmp && TERAT_CMD=plainh tert 'q' </dev/null 2>&1)
 [ "$ans" = "   PLAIN_TEXT_ANSWER" ] ||
 	fail "plain-text harness answered [$ans]"
 
-# 5. with no pi installed the failure is explained, not a shell error
+# 5. a harness that fails must not have its complaint served as the answer.
+#    A CLI run by hand says why on stdout and exits 1; that text is an error,
+#    not a reply, and printing it reads like the model answered.
+cat > ~/.local/bin/angry <<'SH'
+#!/bin/sh
+cat >/dev/null
+printf 'rate limited, retry later\n'
+exit 1
+SH
+chmod +x ~/.local/bin/angry
+out=$(cd /tmp && TERAT_CMD=angry tert 'q' </dev/null 2>&1)
+case $out in
+*"exited 1"*) ;;
+*) fail "a failing harness was served as the answer: [$out]" ;;
+esac
+
+# 6. with no pi installed the failure is explained, not a shell error
 err=$(cd /tmp && PATH=/usr/bin:/bin TERAT_CMD= ~/Projects/terat/tert q </dev/null 2>&1)
 case $err in
 *"pi is not installed"*) ;;
 *) fail "missing-pi message was [$err]" ;;
 esac
 
-# 6. the transcript actually reaches the question: a question can only be
+# 7. the transcript actually reaches the question: a question can only be
 #    answered from the shell's own history if the history is sent.
 if command -v tmux >/dev/null 2>&1; then
 	cat > ~/.local/bin/pi <<'SH'

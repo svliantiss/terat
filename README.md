@@ -86,10 +86,29 @@ one-line wrapper, because that is a different contract:
 exec some-agent --task "$(cat)"
 ```
 
-Verified against real models: `pi` and `claude` both answer through the prompt,
-piped and on a tty, with tracing. `cursor-agent` needs a Cursor account and
-draws a TUI; `dsh` takes its task as an argument and wants its own key. `goose`
-is a database-migration tool and `cc` is a compiler — neither is a harness.
+Verified against real models, through the prompt: `pi`, `claude -p`,
+`llm -m <model>`, `aichat`, and `qwen -p` all answer, piped and on a tty, with
+the glyph and the label and tracing. That is five harnesses, plain-text and
+json alike, which is what makes the contract worth stating.
+
+| harness | answers | `@file` | note |
+|---|---|---|---|
+| `pi -p --mode json` | yes | yes | the default |
+| `claude -p` | yes | yes | reads `@file` itself |
+| `qwen -p` | yes | yes | needs `--auth-type openai` for a non-Google endpoint |
+| `aichat` | yes | no | prefers `passy/<provider>/<model>` as the model id |
+| `llm -m <model>` | yes | no | register the endpoint in `extra-openai-models.yaml` |
+
+`@file` on a harness that does not understand it is *silently* useless: the
+model is handed a path it cannot open and says so. Only attach files to pi,
+claude or qwen.
+
+Tested and not usable: `cursor-agent` needs a Cursor account and draws a TUI;
+`dsh` takes its task as an argument and wants its own key; `gemini` wants a
+Google key and has no OpenAI-compatible mode; `aider` failed on an unrelated
+scipy build; `sgpt` ships without its `click` dependency; `mods` would not
+accept a custom endpoint. `goose` on Homebrew is a database-migration tool, and
+`cc` is a compiler.
 
 Sourcing `terat.zsh` is the whole install for ask mode: it runs the `tert` that
 sits beside it, so the symlink is only needed if you want to type `tert` at the

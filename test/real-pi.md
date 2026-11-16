@@ -37,3 +37,23 @@ Tracing from inside the container also returns `200` from the collector.
 
 The first EACCES is not a terat finding — it is pi needing a writable sessions
 directory, and the fix is to create it, not to change terat.
+
+## Other harnesses in a container
+
+A harness that is a static Linux binary goes in trivially — `aichat` publishes
+`aarch64-unknown-linux-musl`, so it runs with no dependencies at all:
+
+```sh
+curl -sSLo a.tgz https://github.com/sigoden/aichat/releases/download/v0.30.0/aichat-v0.30.0-aarch64-unknown-linux-musl.tar.gz
+tar xzf a.tgz           # ./aichat
+```
+
+Two things differ inside a container:
+
+- the endpoint is `https://router.example.com`, not `localhost`, and
+  `docker run` needs `--add-host=host.docker.internal:host-gateway`;
+- `TERAT_CMD` must be **exported**, not set on the one command, or the prompt
+  path will fall back to `pi` and report it as missing.
+
+Verified: `TERAT_CMD=aichat` answered both piped and through the pty (`🟅`,
+`Pi:`) inside `terat-driver:1`.
