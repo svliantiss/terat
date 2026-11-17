@@ -125,6 +125,16 @@ fi
 # digits and drop the propagation entirely when it is not — asking for a trace
 # with a bad id is a mistake worth ignoring, not a reason to fail the question.
 trace_id=${TERAT_TRACE_ID:-}
+# The directory holding a path, or the cwd for a bare name on PATH. Parameter
+# expansion, not dirname(1): another binary to be missing, and on a stripped
+# PATH it printed "dirname: not found" after the answer, reading as a failure.
+dir_of() {
+	case $1 in
+	*/*) (cd "${1%/*}" 2>/dev/null && pwd) ;;
+	*) pwd ;;
+	esac
+}
+
 case $trace_id in
 *[!0-9a-f]*) trace_id= ;;
 esac
@@ -135,12 +145,7 @@ if [ -n "$trace_id" ] && [ -z "${TERAT_CMD:-}" ]; then
 	????????????????) ;;
 	*) trace_span=$(printf '%016x' $$) ;;
 	esac
-	case $0 in
-	*/*) _td=$(cd "${0%/*}" 2>/dev/null && pwd) ;;
-	*)   _td=$(pwd) ;;
-	esac
-	trace_ext=$_td/terat-trace.js
-	unset _td
+	trace_ext=$(dir_of "$0")/terat-trace.js
 	if [ -f "$trace_ext" ]; then
 		TERAT_TRACE_ID=$trace_id TERAT_TRACE_SPAN=$trace_span \
 			export TERAT_TRACE_ID TERAT_TRACE_SPAN
@@ -241,13 +246,29 @@ stop_child() {
 	return 0
 }
 
+# Every file this run may leave behind. Named once: the list was written out at
+# each exit, and a file missing from one of them leaks.
+tmp_files() {
+	rm -f "$tmp" "$tmp.err" "$tmp.to" "$tmp.stop" "$tmp.stopped" "$tmp.attach" \
+		"$tmp.files" "$tmp.uniq"
+}
+
+# A run that ends without an answer: keep the trace (an error is the run whose
+# trace is worth having), clear up, fail.
+give_up() {
+	trace_ask
+	tmp_files
+	exit "${1:-1}"
+}
+
 bye() {
 	stop_child
 	kill "$watchdog" 2>/dev/null
 	[ -t 1 ] && printf '\r\033[K\033[?25h'
-	rm -f "$tmp" "$tmp.err" "$tmp.to" "$tmp.stop" "$tmp.stopped" "$tmp.attach" "$tmp.files" "$tmp.uniq"
+	tmp_files
 	exit "$1"
 }
+
 trap 'bye 130' INT TERM
 
 # Spin below the question, hide the cursor (it would sit on the frame), and
@@ -283,14 +304,20 @@ spin() {
 	done
 }
 
+# How many bytes have arrived so far. `wc -c <` on a missing file fails in the
+# shell itself, so it is spelled once with the redirect and the trim.
+arrived() {
+	_n=$(wc -c <"$tmp" 2>/dev/null | tr -d ' ')
+	printf '%s' "${_n:-0}"
+}
+
 # Has the agent finished? In json mode `agent_end` is the only true signal.
 done_yet() {
 	grep -q '"type":"agent_end"' "$tmp" 2>/dev/null && return 0
 	# A json run without the marker is still going (or died); the watchdog
 	# decides that, not a pause in the stream.
 	grep -q '"type":"session"' "$tmp" 2>/dev/null && return 1
-	size=$(wc -c <"$tmp" 2>/dev/null | tr -d ' ')
-	size=${size:-0}
+	size=$(arrived)
 	[ "$size" -gt 0 ] || { last=0; g=0; return 1; }
 	[ "$size" = "$last" ] || { last=$size; g=0; return 1; }
 	g=$((g + 1))
@@ -431,8 +458,7 @@ idle=0
 			idle=0
 			continue
 		fi
-		size=$(wc -c <"$tmp" 2>/dev/null | tr -d ' ')
-		size=${size:-0}
+		size=$(arrived)
 		if [ "$size" != "$wsize" ]; then
 			wsize=$size
 			idle=0
@@ -534,10 +560,7 @@ trace_ask() {
 	# Parameter expansion, not dirname(1): that is another binary to be missing.
 	# On a stripped PATH it printed "dirname: not found" after the answer had
 	# already been printed, which reads as a failure when nothing failed.
-	case $self in
-	*/*) trace_dir=$(cd "${self%/*}" 2>/dev/null && pwd) ;;
-	*)   trace_dir=$(pwd) ;;
-	esac
+	trace_dir=$(dir_of "$self")
 	[ -f "$trace_dir/terat-trace.awk" ] || trace_dir=.
 	# Reuse the propagated id when there is one: the whole point of exporting
 	# traceparent is that the spans and the router's ledger settle on one value,
@@ -572,30 +595,27 @@ trace_ask() {
 		*) dbg=$TERAT_OTLP_DEBUG ;;
 		esac
 		(
+			# One request either way. The response is written to a file rather
+			# than discarded so that the debugging branch can show it: a 400
+			# body names the offending field, which is the whole reason for
+			# turning the log on.
+			code=$(curl -sS -m 10 -X POST "$TERAT_OTLP" \
+				-H 'Content-Type: application/json' \
+				${auth:+-H "$auth"} \
+				--data-binary @"$body" \
+				-o "$body.res" -w '%{http_code}' 2>"$body.err")
 			if [ -n "$dbg" ]; then
-				code=$(curl -sS -m 10 -X POST "$TERAT_OTLP" \
-					-H 'Content-Type: application/json' \
-					${auth:+-H "$auth"} \
-					--data-binary @"$body" \
-					-o "$body.res" -w '%{http_code}' 2>"$body.err")
 				{
 					printf '%s %s %s\n' \
 						"$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)" \
 						"${code:-curl-failed}" "$TERAT_OTLP"
-					# A 400 body names the offending field, which is the whole
-					# reason for turning this on. Kept short so the log stays
-					# readable when several questions are being asked.
+					# Kept short so the log stays readable when several
+					# questions are being asked.
 					[ -s "$body.res" ] && sed 's/^/  response: /' "$body.res" | head -5
 					[ -s "$body.err" ] && sed 's/^/  stderr: /' "$body.err" | head -5
 				} >>"$dbg" 2>/dev/null
-				rm -f "$body.res" "$body.err"
-			else
-				curl -sS -m 10 -X POST "$TERAT_OTLP" \
-					-H 'Content-Type: application/json' \
-					${auth:+-H "$auth"} \
-					--data-binary @"$body" >/dev/null 2>&1
 			fi
-			rm -f "$body"
+			rm -f "$body.res" "$body.err" "$body"
 		) &
 	else
 		rm -f "$body"
@@ -616,9 +636,7 @@ if [ ! -s "$tmp" ]; then
 	else
 		printf 'tert: no answer (the harness exited %s)\n' "$rc" >&2
 	fi
-	trace_ask
-	rm -f "$tmp" "$tmp.err" "$tmp.to" "$tmp.stop" "$tmp.stopped" "$tmp.attach"
-	exit 1
+	give_up
 fi
 
 ans=$(answer <"$tmp")
@@ -645,9 +663,7 @@ label() {
 if [ "$rc" -ne 0 ] && [ -n "$ans" ] && [ ! -e "$tmp.stopped" ]; then
 	printf 'tert: the harness exited %s; it said:\n' "$rc" >&2
 	printf '%s\n' "$ans" >&2
-	trace_ask
-	rm -f "$tmp" "$tmp.err" "$tmp.to" "$tmp.stop" "$tmp.stopped" "$tmp.attach"
-	exit 1
+	give_up
 fi
 
 # Events came back but nobody spoke: the run failed, or it only used tools. Say
@@ -691,9 +707,7 @@ if [ -z "$ans" ]; then
 	else
 		printf 'tert: no answer (the run ended without a reply)\n' >&2
 	fi
-	trace_ask
-	rm -f "$tmp" "$tmp.err" "$tmp.to" "$tmp.stop" "$tmp.stopped" "$tmp.attach"
-	exit 1
+	give_up
 fi
 
 # On a terminal the answer is labelled, so it cannot be mistaken for command
@@ -736,4 +750,4 @@ printf 'user: %s\nassistant: %s\n' "$q" "$ans" >>"$thread"
 
 # After the answer is on screen, so a slow collector delays nothing.
 trace_ask
-rm -f "$tmp" "$tmp.err" "$tmp.to" "$tmp.stop" "$tmp.stopped" "$tmp.attach"
+tmp_files
