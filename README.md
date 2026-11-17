@@ -1,4 +1,4 @@
-# tert
+# terat
 
 Ask pi at your prompt. The prompt itself is unchanged — same path, same colours,
 same starship — only its `❯` becomes `🟅`, and a line you type is a question
@@ -37,7 +37,7 @@ redrawn after the fact — there is no flicker to have.
 
 | File | Job |
 | --- | --- |
-| `tert` | asks pi one question, prints the answer, remembers it |
+| `terat` | asks pi one question, prints the answer, remembers it |
 | `terat.zsh` | the ask mode: glyph, Enter, `!`, Ctrl-C, plugins off |
 | `terat.lua` | optional: the same thing under a Rex shortcut |
 
@@ -53,24 +53,24 @@ Unix, and the pty relay uses `script`, which ships with macOS and util-linux
 (see [When `script` is missing](#when-script-is-missing)).
 
 ```sh
-ln -sf $PWD/tert ~/.local/bin/tert   # optional: for typing `tert` yourself
+ln -sf $PWD/terat ~/.local/bin/terat   # optional: for typing `terat` yourself
 echo "source $PWD/terat.zsh" >> ~/.zshrc   # zsh ask mode
 ```
 
-If `pi` is not installed, `tert` says so and exits rather than relaying a shell
+If `pi` is not installed, `terat` says so and exits rather than relaying a shell
 error:
 
 ```
 🟅 hello
-tert: pi is not installed, and it is what answers the question
-tert: install it, or point TERAT_CMD at another harness
+terat: pi is not installed, and it is what answers the question
+terat: install it, or point TERAT_CMD at another harness
 ```
 
 `TERAT_CMD` is the general form: anything that takes the question on stdin and
 writes the answer on stdout can stand in for pi. Claude Code works this way:
 
 ```sh
-TERAT_CMD='claude -p' tert 'why is the build failing?'
+TERAT_CMD='claude -p' terat 'why is the build failing?'
 ```
 
 It follows the same contract — question on stdin, answer on stdout — and exits
@@ -78,7 +78,7 @@ when it is done, so the wait is exact. Set `TERAT_NAME=Claude` if you would
 rather the label read `Claude:` than `Pi:`.
 
 A harness that wants the question as an *argument* instead of on stdin needs no
-wrapper: put `{}` where the question goes and `tert` fills it in (see [harnesses
+wrapper: put `{}` where the question goes and `terat` fills it in (see [harnesses
 that want the question as an argument](#harnesses-that-want-the-question-as-an-argument)).
 
 | harness | answers | `@file` | `TERAT_CMD` |
@@ -109,7 +109,7 @@ deep inside an `npm i -g` with a bare exit code is more often the daemon being
 out of disk than the registry being down (`docker system df`, then
 `docker builder prune`).
 
-`@file` is handled by `tert`, not by the harness. The file is read, and its text
+`@file` is handled by `terat`, not by the harness. The file is read, and its text
 is inlined into the question under `Attached:`; a binary is named and skipped, and
 `TERAT_ATTACH_MAX` (default 200000 bytes) caps the total. This is the one place a
 little of the terminal's own reading is worth doing: passing `@path` through only
@@ -124,8 +124,8 @@ they take it as an argument, and refuse to start otherwise. Put `{}` in
 spaces and shell syntax intact:
 
 ```sh
-TERAT_CMD='grok -p {}' tert 'what changed in this diff?'
-TERAT_CMD='dsh --profile headless {}' tert 'why is the build failing?'
+TERAT_CMD='grok -p {}' terat 'what changed in this diff?'
+TERAT_CMD='dsh --profile headless {}' terat 'why is the build failing?'
 ```
 
 The argument is the whole transcript — the question, any earlier turns, and any
@@ -199,8 +199,8 @@ scipy build; `sgpt` ships without its `click` dependency; `mods` would not
 accept a custom endpoint. `goose` on Homebrew is a database-migration tool, and
 `cc` is a compiler.
 
-Sourcing `terat.zsh` is the whole install for ask mode: it runs the `tert` that
-sits beside it, so the symlink is only needed if you want to type `tert` at the
+Sourcing `terat.zsh` is the whole install for ask mode: it runs the `terat` that
+sits beside it, so the symlink is only needed if you want to type `terat` at the
 prompt yourself.
 
 ### When `script` is missing
@@ -226,17 +226,17 @@ piping:
 
 ```
 ~/Projects/terat ❯ ls
-README.md  archive  terat.lua  terat.zsh  tert
+README.md  archive  terat.lua  terat.zsh  terat
 ~/Projects/terat ❯ @which of those is a folder?
 Pi: `archive` is the only one.
 ```
 
-`tert` with no question is also a shell — the same zsh, unchanged — for when you
+`terat` with no question is also a shell — the same zsh, unchanged — for when you
 would rather open one by that name:
 
 ```sh
-ln -sf $PWD/tert ~/.local/bin/tert
-# then open `tert` where you would open `zsh`
+ln -sf $PWD/terat ~/.local/bin/terat
+# then open `terat` where you would open `zsh`
 ```
 
 `Ctrl-C` leaves asking and keeps you in the shell; `exit` closes it.
@@ -259,7 +259,7 @@ a line you had half-written is still there when you come back out. The same key
 flips either way, so Rex never has to know which state the pane is in and the
 shortcut and the shell cannot disagree.
 
-`tert` alone at the prompt still flips it too, for panes where the shortcut is
+`terat` alone at the prompt still flips it too, for panes where the shortcut is
 not available. It is the same flip, just spelled out.
 
 Rex can also be told about a broken config, which is worth knowing because a
@@ -282,7 +282,7 @@ The prefix is the whole interface: `@` at an empty prompt turns it into ask mode
 | `@shot.png what is this?` | attaches the file and asks |
 | `!ls` | runs the command, stays in the mode |
 | `#src` | attaches that folder's files to your question |
-| `tert` | flips in place, either direction |
+| `terat` | flips in place, either direction |
 | `Ctrl+C` / empty Return | leaves the mode |
 
 Everything else is the shell you already had: same prompt, same path, same
@@ -336,7 +336,7 @@ POSTDISPLAY=; region_highlight=()
 
 ## What the model can see
 
-`tert` does not take the agent's hands away. It runs `pi` natively — the same
+`terat` does not take the agent's hands away. It runs `pi` natively — the same
 tools, the same permissions and the same default prompt as running `pi` in that
 directory yourself — and only adds the transcript and the question to it. So a
 question can be an instruction:
@@ -369,7 +369,7 @@ assistant: No - it exited 1, so that directory does not exist.
 Only failures get an `exit:` line, so the transcript stays quiet.
 
 So "what did I just do" works, and two terminals never mix into one
-conversation — the thread is per shell, not per machine. `tert` works the name
+conversation — the thread is per shell, not per machine. `terat` works the name
 out itself, from `TERAT_THREAD` or, when that is unset, from the pid of the shell
 that started it, so a shell opened before this was installed still gets its own
 transcript instead of sharing one.
@@ -397,7 +397,7 @@ no `!`, no piping, no asking first:
 
 ```
 ~/Projects/terat ❯ ls
-README.md  archive  terat.lua  terat.zsh  tert
+README.md  archive  terat.lua  terat.zsh  terat
 ~/Projects/terat ❯ @which of those is a folder?
 Pi: `archive` is the only one.
 ```
@@ -421,7 +421,7 @@ because it *is* one.
 
 ```
 ~/Projects/terat ❯ ls
-README.md   archive   terat.lua   terat.zsh   tert     # coloured, in columns
+README.md   archive   terat.lua   terat.zsh   terat    # coloured, in columns
 ```
 
 The redirect is deliberately *not* left on. With fd 1 redirected zsh block-buffers
@@ -464,7 +464,7 @@ A pipe is also the other way round: when you want the model to read output that
 was never captured — a file, another machine — pipe it in:
 
 ```
-ls -l | tert "which of these is the largest?"
+ls -l | terat "which of these is the largest?"
 ```
 
 Two cheap facts go along with every question, so questions about what is in
@@ -472,7 +472,7 @@ front of you work without attaching anything:
 
 ```
 Where: /home/dev/Projects/terat
-Here: README.md archive terat.lua terat.zsh tert
+Here: README.md archive terat.lua terat.zsh terat
 ```
 
 That is where the shell is and what sits there, capped at 20 names, so it stays
@@ -485,7 +485,7 @@ says it is context which has already happened:
 Question: why did that fail?
 --- context, for reference only; already true, do not act on it ---
 Where: /home/dev/Projects/terat
-Here: README.md tert
+Here: README.md terat
 Shell history (commands already run, output already shown):
 cmd: make
 out:
@@ -518,7 +518,7 @@ export TERAT_THREAD=~/.terat/thread     # one shared thread for every shell
 Sharing is the thing that went wrong by accident: one file for every shell made
 the model answer about another tab's work. Set this only if you want that.
 
-`tert "a question"` asks once and prints the answer without entering the mode,
+`terat "a question"` asks once and prints the answer without entering the mode,
 which is also what works in bash, ssh and containers with no shell hook.
 
 `Ctrl+I` is not usable as the key: it is Tab (0x09), the same byte Terminal.app
@@ -547,8 +547,8 @@ and a `@` or `#` that names nothing simply stays part of your question:
 The same works outside the mode, and in bash or a container:
 
 ```sh
-tert @shot.png "what is this?"
-tert "#src" "summarise this folder"
+terat @shot.png "what is this?"
+terat "#src" "summarise this folder"
 ```
 
 ## While it waits
@@ -571,7 +571,7 @@ It also cannot be inferred from a pause in the output. `pi` is a coding agent:
 asked to create a file, run a test or search a tree, it goes silent while the
 tool works, and a file being created produces no output at all until the write
 lands. Watching for a gap would kill exactly the runs worth waiting for. So
-`tert` asks pi for `--mode json` and waits for the `agent_end` event it emits
+`terat` asks pi for `--mode json` and waits for the `agent_end` event it emits
 when the agent is genuinely done.
 
 There is no total time limit, because there cannot be a useful one. A tool call
@@ -605,7 +605,7 @@ The model writes prose as one very long line — a single sentence can be 600
 characters with no newline in it at all. A terminal does not wrap at word
 boundaries; it breaks at the exact column, so that sentence arrived cut through
 the middle of words (`serve` / `rs`, `aga` / `in`) with the left edge drifting.
-`tert` now breaks the answer at spaces to the width of the terminal it is
+`terat` now breaks the answer at spaces to the width of the terminal it is
 printing to, taken from the terminal itself rather than `tput cols` — inside a
 command substitution stdout is a pipe, so `tput` answers 80 whatever the window
 really is. It stops one column short, because a line that fills the last column
@@ -624,8 +624,8 @@ question is unaffected.
 | `TERAT_OUT` | `40` | how many lines of a command's output are kept |
 | `TERAT_LIST` | `20` | how many names from the current directory are sent |
 | `TERAT_THREAD` | `~/.terat/thread.$$` | transcript sent as context, one per shell |
-| `TERAT_RAW` | `$TMPDIR/terat.$$.raw` | where `tert`-as-shell copies output; removed on exit |
-| `TERAT_SHELL_BIN` | `/bin/zsh` | which shell `tert` starts in normal mode |
+| `TERAT_RAW` | `$TMPDIR/terat.$$.raw` | where `terat`-as-shell copies output; removed on exit |
+| `TERAT_SHELL_BIN` | `/bin/zsh` | which shell `terat` starts in normal mode |
 | `TERAT_NAME` | `Pi` | label printed before an answer on a terminal |
 | `TERAT_SPIN` | `below` | `inline` puts the spinner on the question's line; `below` gives it its own |
 | `TERAT_SYMBOL` | `🟅` | the glyph shown in ask mode |
@@ -652,7 +652,7 @@ Both can live in a `.env` next to `terat.zsh` instead of in `~/.zshrc`.
 `TERAT_OTLP_KEY` and ignoring everything else in it. It is parsed rather than
 sourced: a file kept for one secret should not be able to run commands in every
 shell. A value already set in the environment wins, so a one-off
-`TERAT_OTLP=... tert` still overrides the file. Keep `.env` out of git — the repo
+`TERAT_OTLP=... terat` still overrides the file. Keep `.env` out of git — the repo
 gitignores it.
 
 Self-hosted Laminar here is `https://otlp.example.com/v1/traces`, and its UI lives
@@ -665,7 +665,7 @@ never delay a prompt. The cost is that a wrong key is silent. Turn on the log
 when you need to know:
 
 ```sh
-TERAT_OTLP_DEBUG=1 tert 'why is the build failing?'
+TERAT_OTLP_DEBUG=1 terat 'why is the build failing?'
 tail -1 "$TMPDIR/terat.otlp.log"     # "… 200 https://…/v1/traces"
 ```
 
@@ -772,7 +772,7 @@ How it is built, and why:
 - **A real `/v1/traces` path.** Unlike the OTel HTTP exporters, the path is not
   appended for you — put it in `TERAT_OTLP`, as above.
 
-`terat-trace.awk` is the only file that knows what a span is. `tert` just runs
+`terat-trace.awk` is the only file that knows what a span is. `terat` just runs
 it and posts the result, so tracing can be deleted without touching the answer
 path, and the answer path can be changed without touching tracing.
 
@@ -785,7 +785,7 @@ what was actually asked. Both halves are useful, and by default they share no
 identifier.
 
 A W3C `traceparent` fixes that. router reads `traceparent` and stores its trace
-id as `requests.trace_id`; `tert` also uses that id for the OTLP spans. One
+id as `requests.trace_id`; `terat` also uses that id for the OTLP spans. One
 value then finds the same work in Laminar and in the router:
 
 ```sh
@@ -822,7 +822,7 @@ join lives in router's own database rather than in a trace backend.
 
 ### Which model answers
 
-`tert` runs whatever `pi -p` resolves to, so the model is pi's business, not
+`terat` runs whatever `pi -p` resolves to, so the model is pi's business, not
 terat's. On a machine where Passy Me is running, its local router is the route
 that uses a subscription rather than a metered key:
 
@@ -842,8 +842,8 @@ that uses a subscription rather than a metered key:
 "defaultModel": "some/model"
 ```
 
-Then `pi -p` routes there by default and `tert` needs no change. Check it with
-`pi --list-models`, or ask `tert` and watch which route is used in the pi log.
+Then `pi -p` routes there by default and `terat` needs no change. Check it with
+`pi --list-models`, or ask `terat` and watch which route is used in the pi log.
 A metered key (`api.passy.ai`) answers as the same model family but bills per
 token; the subscription ids end in `-subscription` and only exist on the router.
 
@@ -853,7 +853,7 @@ token; the subscription ids end in `-subscription` and only exist on the router.
 answer on stdout, so a harness that works that way needs nothing else:
 
 ```sh
-TERAT_CMD='some-agent -p' tert 'why is the build failing?'
+TERAT_CMD='some-agent -p' terat 'why is the build failing?'
 ```
 
 What you get back depends on how much the command says. `pi --mode json` reports
@@ -869,7 +869,7 @@ Two limits are worth knowing before reaching for a different harness:
   that reads stdin and passes it as an argument:
   `task=$(cat); exec other-agent "$task"`.
 - **Failures are reported from stderr.** If the command prints nothing usable,
-  `tert` prints the first non-empty line the command wrote to stderr, so a
+  `terat` prints the first non-empty line the command wrote to stderr, so a
   missing key or a bad flag is visible instead of appearing as an empty answer.
 
 Only `pi` is exercised by this project's own tests. The others are supported in
@@ -889,8 +889,9 @@ sh test/run.sh debian alpine  # a subset
 bookworm, Ubuntu, Fedora, Alpine, Amazon Linux, bullseye (zsh 5.8) and Arch
 (zsh 5.9.2, amd64 under emulation). Per distro: it parses under that `sh`,
 `zsh` and `awk`; a question gets an answer; piped output stays raw; the prompt
-becomes `🟅` through a real pty; the transcript reaches the question; and a
-missing `pi` is explained instead of relaying a shell error.
+becomes `🟅` through a real pty; the program's bare name typed at the prompt
+flips the mode rather than being asked of the model; the transcript reaches the
+question; and a missing `pi` is explained instead of relaying a shell error.
 
 The suite is falsified on purpose: delete the transcript line or the glyph
 fallback and it goes red, so a green run means something. Build failures are
@@ -906,5 +907,5 @@ like a pass.
 - A failed call prints to stderr and exits non-zero; nothing is written to the
   thread and nothing pretends to be an answer.
 - Answers are labelled `Pi:` on a terminal and left raw when piped, so
-  `printf 'why?\n' | tert` stays scriptable.
+  `printf 'why?\n' | terat` stays scriptable.
 - Questions are not shell commands and never reach your history.

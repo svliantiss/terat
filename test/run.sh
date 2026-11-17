@@ -34,7 +34,7 @@ WORKDIR /home/dev
 EOF
 }
 
-# One image per distro, each with zsh + tmux + the basics tert shells out to.
+# One image per distro, each with zsh + tmux + the basics terat shells out to.
 build_distro() {
 	case $1 in
 	debian)   base=debian:bookworm-slim; pkgs='apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends zsh tmux coreutils procps curl ca-certificates gawk && rm -rf /var/lib/apt/lists/*' ;;

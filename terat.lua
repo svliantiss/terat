@@ -1,4 +1,4 @@
--- terat.lua - the Rex half of tert: Cmd+Shift+I toggles ask mode in this pane.
+-- terat.lua - the Rex half of ask mode: Cmd+Shift+I toggles it in this pane.
 --
 -- Add to your Rex config:
 --   dofile(os.getenv("HOME") .. "/Projects/terat/terat.lua")
@@ -23,7 +23,7 @@ rex.action{
     end
 
     -- Ctrl-X i, the shell's own toggle binding. Two bytes and no Return: the
-    -- shell acts on the key instead of running a command, so `tert` never
+    -- shell acts on the key instead of running a command, so `terat` never
     -- appears on the line, no newline is added and whatever was half-typed is
     -- still there when you come back out of the mode.
     local _, err = rex.call("com.superlogical.terminal.write", {

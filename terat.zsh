@@ -2,7 +2,7 @@
 #
 # The prompt is not redrawn or mimicked: starship (or whatever PROMPT holds)
 # keeps producing it, and one character is swapped on the way out. A typed line
-# is a question for `tert` instead of a command.
+# is a question for `terat` instead of a command.
 
 typeset -g TERAT_MODE=0
 typeset -g TERAT_SYMBOL=${TERAT_SYMBOL:-🟅}
@@ -28,8 +28,8 @@ if [[ -r $_terat_env ]]; then
 fi
 unset _terat_env
 
-typeset -g _terat_tert=${_terat_tert:-${${(%):-%x}:A:h}/tert}
-[[ -x $_terat_tert ]] || _terat_tert=tert
+typeset -g _terat_ask_bin=${_terat_ask_bin:-${${(%):-%x}:A:h}/terat}
+[[ -x $_terat_ask_bin ]] || _terat_ask_bin=terat
 
 # One thread per shell, keyed by pid: two tabs must not share a conversation.
 typeset -g TERAT_THREAD=${TERAT_THREAD:-$HOME/.terat/thread.$$}
@@ -44,7 +44,7 @@ _terat_cmd() {
 	_terat_off=''
 	[[ -n $TERAT_RAW && ! -e $TERAT_RAW ]] && _terat_raw
 	_terat_off=$(_terat_bytes)
-	[[ $1 == tert* || $1 == _terat* ]] && return
+	[[ $1 == terat* || $1 == _terat* ]] && return
 	print -r -- "cmd: $1" >>"$TERAT_THREAD"
 	_terat_pending=1
 	_terat_last=$1
@@ -279,7 +279,7 @@ _terat_line() {
 	print -n "\033[1A\r\033[K"
 	print -rnP -- "${ptxt#$'\n'}"
 	# TERAT_SPIN=inline draws the spinner behind the question instead of on the
-	# line below, so tert needs this line left open to draw on. It ends the line
+	# line below, so terat needs this line left open to draw on. It ends the line
 	# itself when it is done.
 	if [[ $2 == inline ]]; then
 		print -rn -- "$1"
@@ -294,8 +294,8 @@ _terat_accept() {
 	emulate -L zsh
 	local q=$BUFFER
 
-	# `tert` alone flips the mode in place: nothing is printed.
-	if [[ ${q//[[:space:]]/} == tert ]]; then
+	# `terat` alone flips the mode in place: nothing is printed.
+	if [[ ${q//[[:space:]]/} == terat ]]; then
 		unsetopt localoptions # the mode's option changes must outlive the widget
 		TERAT_MODE=$(( ! TERAT_MODE ))
 		_terat_apply
@@ -455,15 +455,15 @@ _terat_named() {
 	[[ -e $p ]]
 }
 
-# Print prompt + question, then let tert answer below it. zle redraws the
+# Print prompt + question, then let terat answer below it. zle redraws the
 # prompt itself when the widget returns: a reset-prompt here would eat the
 # answer line.
 _terat_ask() {
 	local style=${TERAT_SPIN:-below}
 	_terat_line "$1" "$style"
 	_terat_words "$1"
-	# tert sits next to this file, so sourcing it is enough: no PATH change.
-	TERAT_SPIN=$style command ${_terat_tert:-tert} "${_terat_out[@]}"
+	# terat sits next to this file, so sourcing it is enough: no PATH change.
+	TERAT_SPIN=$style command ${_terat_ask_bin:-terat} "${_terat_out[@]}"
 	local rc=$?
 	# Ctrl-C while the answer is still arriving leaves the mode here rather
 	# than trusting the trap, which can run after zle has redrawn the prompt.

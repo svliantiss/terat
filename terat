@@ -1,16 +1,16 @@
 #!/bin/sh
-# tert - ask pi one question and print the answer.
+# terat - ask pi one question and print the answer.
 #
-#   tert "why did that build fail?"
-#   tert @shot.png "what is this?"
-#   printf 'why?\n' | tert
+#   terat "why did that build fail?"
+#   terat @shot.png "what is this?"
+#   printf 'why?\n' | terat
 #
 # In zsh with terat.zsh loaded, `@` on a line switches the prompt into ask mode.
 
 # One transcript per shell. TERAT_THREAD is set by terat.zsh, but a shell started
 # before that line existed would not have it, so fall back to the parent's pid
 # rather than one shared file: that is what mixed two terminals into one
-# conversation. $$ is tert itself, always fresh, so it cannot stand in.
+# conversation. $$ is terat itself, always fresh, so it cannot stand in.
 # HOME can be unset (cron, `env -u HOME`, a stripped container). Falling back to
 # the current directory keeps the transcript working instead of trying to create
 # /.terat and printing a mkdir error at exit.
@@ -31,7 +31,7 @@ spin_style=${TERAT_SPIN:-below}
 # writability and fall back rather than assume.
 tmp_base=${TMPDIR:-/tmp}
 [ -d "$tmp_base" ] && [ -w "$tmp_base" ] || tmp_base=/tmp
-tmp=$tmp_base/tert.$$
+tmp=$tmp_base/terat.$$
 # When the question was asked, in milliseconds. Only used for tracing, and only
 # when the answer stream carries no timestamps of its own — a plain-text harness
 # has none, so without this the root span would claim to have taken no time.
@@ -104,8 +104,8 @@ sys_ok=''
 # for the default command: TERAT_CMD is the caller's business, and a path that
 # does not exist yet is a legitimate thing to test.
 if [ -z "${TERAT_CMD:-}" ] && ! command -v pi >/dev/null 2>&1; then
-	printf 'tert: pi is not installed, and it is what answers the question\n' >&2
-	printf 'tert: install it, or point TERAT_CMD at another harness\n' >&2
+	printf 'terat: pi is not installed, and it is what answers the question\n' >&2
+	printf 'terat: install it, or point TERAT_CMD at another harness\n' >&2
 	exit 127
 fi
 
@@ -213,7 +213,7 @@ while IFS= read -r f; do
 done <"$tmp.uniq"
 rm -f "$tmp.files" "$tmp.uniq"
 
-# `tert` with no question is just a shell: the same zsh you would otherwise
+# `terat` with no question is just a shell: the same zsh you would otherwise
 # start, which loads terat.zsh and with it the capture. Nothing is wrapped, so
 # this is all of "normal mode". It has to come before the read below, which
 # would otherwise block waiting for a question that is not coming.
@@ -225,7 +225,7 @@ fi
 [ -z "$q" ] && [ "$#" -eq 0 ] && exit 0
 
 # Output piped in is context. A shell cannot see what its own commands printed,
-# so this is the one way to show it: `ls -l | tert "what is this?"`. With no
+# so this is the one way to show it: `ls -l | terat "what is this?"`. With no
 # question given, the first line of the pipe is the question instead.
 out=''
 if [ ! -t 0 ]; then
@@ -576,8 +576,8 @@ trace_ask() {
 	if [ -z "${TERAT_OTLP:-}" ] || [ ! -s "$tmp" ]; then
 		return 0
 	fi
-	# Resolve the entry point before taking its directory: tert is normally
-	# reached through ~/.local/bin/tert, and terat-trace.awk sits next to the
+	# Resolve the entry point before taking its directory: terat is normally
+	# reached through ~/.local/bin/terat, and terat-trace.awk sits next to the
 	# real script rather than next to the link. Getting this wrong drops every
 	# trace silently, which is the worst way to lose them.
 	self=$0
@@ -651,15 +651,15 @@ trace_ask() {
 if [ ! -s "$tmp" ]; then
 	[ -s "$tmp.err" ] && head -5 "$tmp.err" >&2
 	if [ -e "$tmp.to" ]; then
-		printf 'tert: no output for %ss with no tool running, so the run looks stuck\n' "$max" >&2
+		printf 'terat: no output for %ss with no tool running, so the run looks stuck\n' "$max" >&2
 	elif [ "$rc" -eq 0 ]; then
 		# It ran, succeeded by its own account, and said nothing. That is what
 		# a harness does when the model returns empty content, and saying
 		# "no answer" without the exit code sends you looking in the wrong
 		# place.
-		printf 'tert: no answer (the harness exited 0 and printed nothing)\n' >&2
+		printf 'terat: no answer (the harness exited 0 and printed nothing)\n' >&2
 	else
-		printf 'tert: no answer (the harness exited %s)\n' "$rc" >&2
+		printf 'terat: no answer (the harness exited %s)\n' "$rc" >&2
 	fi
 	give_up
 fi
@@ -686,7 +686,7 @@ label() {
 # did not exit, which is normal for pi. Only a harness that failed on its own
 # gets to have its complaint withheld.
 if [ "$rc" -ne 0 ] && [ -n "$ans" ] && [ ! -e "$tmp.stopped" ]; then
-	printf 'tert: the harness exited %s; it said:\n' "$rc" >&2
+	printf 'terat: the harness exited %s; it said:\n' "$rc" >&2
 	printf '%s\n' "$ans" >&2
 	give_up
 fi
@@ -726,11 +726,11 @@ if [ -z "$ans" ]; then
 	# reporting "ended without a reply" for it sends you looking for a model
 	# fault when the real cause was the clock, and TERAT_MAX is the fix.
 	if [ -e "$tmp.to" ]; then
-		printf 'tert: no output for %ss with no tool running, so the run looks stuck\n' "$max" >&2
+		printf 'terat: no output for %ss with no tool running, so the run looks stuck\n' "$max" >&2
 	elif [ -n "$msg" ]; then
-		printf 'tert: %s\n' "$msg" >&2
+		printf 'terat: %s\n' "$msg" >&2
 	else
-		printf 'tert: no answer (the run ended without a reply)\n' >&2
+		printf 'terat: no answer (the run ended without a reply)\n' >&2
 	fi
 	give_up
 fi

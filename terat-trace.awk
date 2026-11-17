@@ -1,7 +1,7 @@
 # terat-trace.awk - turn pi's --mode json event stream into one OTLP trace.
 #
 # Reads the events on stdin, writes an OTLP/HTTP JSON request body on stdout.
-# Nothing else in terat knows what a span is: tert posts this body with curl, so
+# Nothing else in terat knows what a span is: terat posts this body with curl, so
 # tracing needs no SDK, no collector and no background process when it is off.
 #
 # The shape: one root span for the question, a child span per model turn and a
@@ -180,7 +180,7 @@ function span(id, parent, name, from, to, attrs, code,   s) {
 	}
 	if ($0 ~ /"type":[ ]*"message_end"/) {
 		# The user turn is the question as the harness actually sent it, which
-		# is not always the string tert was given: a harness may prepend
+		# is not always the string terat was given: a harness may prepend
 		# context. Prefer it over the command line, and keep the last one
 		# because that is the turn this trace is about.
 		if (str($0, "role") == "user") {
@@ -241,7 +241,7 @@ END {
 	# asked, in which directory, and how long it took. Silence would make it
 	# look as though tracing were broken.
 	# A trace needs an id: an empty traceId is invalid OTLP and a collector will
-	# reject the whole batch. tert always supplies one, so reaching here without
+	# reject the whole batch. terat always supplies one, so reaching here without
 	# it means the caller is doing something else, and silence is the honest
 	# answer rather than a request that cannot be accepted.
 	if (trace == "") exit 0
@@ -249,7 +249,7 @@ END {
 	svc = ENVIRON["TERAT_TRACE_SERVICE"]
 	if (svc == "") svc = "terat"
 	# pi names the directory in its session event; anything else leaves it
-	# blank, so start from where tert ran and let the session event override.
+	# blank, so start from where terat ran and let the session event override.
 	if (cwd == "") cwd = ENVIRON["TERAT_TRACE_CWD"]
 
 	# Anchor the timeline. Model turns carry absolute times; a tool call only
@@ -263,7 +263,7 @@ END {
 			break
 		}
 	}
-	# Without events there is no clock in the stream, so fall back to when tert
+	# Without events there is no clock in the stream, so fall back to when terat
 	# started, and let the root span run to now. That is the whole answer for a
 	# plain-text harness: one span, honest duration, nothing invented.
 	if (cursor == 0) cursor = (began != "" && began + 0 > 0) ? began + 0 : nowms

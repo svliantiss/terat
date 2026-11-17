@@ -13,10 +13,10 @@ echo "  sh=$(readlink -f /bin/sh 2>/dev/null | sed 's|.*/||')"
 # Install the way the README says, from an empty home.
 mkdir -p ~/Projects/terat ~/.local/bin
 cp -R /src/. ~/Projects/terat/ 2>/dev/null || fail "copy source"
-chmod +x ~/Projects/terat/tert
+chmod +x ~/Projects/terat/terat
 
 # 1. parses under this distro's sh, zsh and awk
-sh -n ~/Projects/terat/tert || fail "sh -n tert"
+sh -n ~/Projects/terat/terat || fail "sh -n terat"
 zsh -n ~/Projects/terat/terat.zsh || fail "zsh -n terat.zsh"
 awk -f ~/Projects/terat/terat-trace.awk /dev/null || fail "awk parse"
 
@@ -30,11 +30,11 @@ printf '{"type":"message_end","message":{"role":"assistant","content":[{"type":"
 printf '{"type":"agent_end"}\n'
 SH
 chmod +x ~/.local/bin/pi
-ln -sf ~/Projects/terat/tert ~/.local/bin/tert
+ln -sf ~/Projects/terat/terat ~/.local/bin/terat
 export PATH="$HOME/.local/bin:$PATH"
 
 # 2. a question gets an answer; piped output is raw, with no label
-ans=$(cd /tmp && tert 'q' </dev/null 2>&1)
+ans=$(cd /tmp && terat 'q' </dev/null 2>&1)
 [ "$ans" = "ANSWER_OK" ] || fail "piped answer was [$ans]"
 
 # 3. through a real pty the prompt becomes the glyph and the answer is labelled
@@ -76,6 +76,29 @@ if command -v tmux >/dev/null 2>&1; then
 	# the plain branch render like zle would.
 	grep -q '%~' /tmp/scr.txt && fail "pty: the prompt shows %~ instead of a path"
 	note=pty+glyph+label
+	# The program's own name alone flips the mode, and the name is not the one
+	# it used to be: a rename that misses this line leaves `terat` typed at the
+	# prompt being sent to the model as a question. It is its own claim because
+	# nothing else in the suite types a bare word.
+	tmux new-session -d -s W -x 100 -y 30 "zsh -i"
+	i=0
+	while [ $i -lt 40 ]; do
+		sleep 1
+		tmux capture-pane -pt W 2>/dev/null | grep -q '%' && break
+		i=$((i + 1))
+	done
+	tmux send-keys -t W 'terat' Enter
+	i=0
+	while [ $i -lt 20 ]; do
+		sleep 1
+		tmux capture-pane -pt W >/tmp/word.txt 2>/dev/null
+		grep -q '🟅' /tmp/word.txt && break
+		i=$((i + 1))
+	done
+	tmux kill-server 2>/dev/null
+	grep -q '🟅' /tmp/word.txt || fail "a bare terat did not flip the prompt to the glyph"
+	grep -q 'Pi:' /tmp/word.txt && fail "a bare terat was asked of the model instead of flipping"
+	note=$note+word
 else
 	note=no-tmux
 fi
@@ -88,7 +111,7 @@ cat >/dev/null
 printf '   PLAIN_TEXT_ANSWER\n'
 SH
 chmod +x ~/.local/bin/plainh
-ans=$(cd /tmp && TERAT_CMD=plainh tert 'q' </dev/null 2>&1)
+ans=$(cd /tmp && TERAT_CMD=plainh terat 'q' </dev/null 2>&1)
 [ "$ans" = "   PLAIN_TEXT_ANSWER" ] ||
 	fail "plain-text harness answered [$ans]"
 
@@ -102,14 +125,14 @@ printf 'rate limited, retry later\n'
 exit 1
 SH
 chmod +x ~/.local/bin/angry
-out=$(cd /tmp && TERAT_CMD=angry tert 'q' </dev/null 2>&1)
+out=$(cd /tmp && TERAT_CMD=angry terat 'q' </dev/null 2>&1)
 case $out in
 *"exited 1"*) ;;
 *) fail "a failing harness was served as the answer: [$out]" ;;
 esac
 
 # 8. a harness that answers and then refuses to exit must not be reported as a
-#    failure. pi stays alive after agent_end, so tert stops it and `wait` comes
+#    failure. pi stays alive after agent_end, so terat stops it and `wait` comes
 #    back with 143. Reading that as "the harness failed" hides a good answer
 #    behind an error, which is worse than either on its own.
 cat > ~/.local/bin/stubborn <<'SH'
@@ -120,7 +143,7 @@ printf '{"type":"agent_end"}\n'
 sleep 600
 SH
 chmod +x ~/.local/bin/stubborn
-out=$(cd /tmp && TERAT_CMD=stubborn tert 'q' </dev/null 2>&1)
+out=$(cd /tmp && TERAT_CMD=stubborn terat 'q' </dev/null 2>&1)
 case $out in
 *STUBBORN_OK*) ;;
 *) fail "a harness that answered was rejected as failed: [$out]" ;;
@@ -135,7 +158,7 @@ cat > ~/.local/bin/echoall <<'SH'
 cat
 SH
 chmod +x ~/.local/bin/echoall
-out=$(cd /tmp && TERAT_CMD=echoall tert 'what is the code?' @attach.txt </dev/null 2>&1)
+out=$(cd /tmp && TERAT_CMD=echoall terat 'what is the code?' @attach.txt </dev/null 2>&1)
 case $out in
 *TANGERINE*) ;;
 *) fail "an @file was not inlined for the harness: [$out]" ;;
@@ -150,7 +173,7 @@ printf 'argc=%s\n' "$#"
 for a in "$@"; do printf 'ARG[%s]\n' "$a"; done
 SH
 chmod +x ~/.local/bin/taskcli
-out=$(cd /tmp && TERAT_CMD='taskcli --flag {} --tail' tert 'say "hi" && echo $HOME' </dev/null 2>&1)
+out=$(cd /tmp && TERAT_CMD='taskcli --flag {} --tail' terat 'say "hi" && echo $HOME' </dev/null 2>&1)
 case $out in
 *'ARG[--flag]'*'Question: say "hi" && echo $HOME'*'ARG[--tail]'*) ;;
 *) fail "the {} placeholder did not pass the question as one argument: [$out]" ;;
@@ -158,7 +181,7 @@ esac
 
 # 11. two placeholders each get the question. Adjacent ones used to overwrite
 #     each other, which silently dropped an argument rather than failing.
-out=$(cd /tmp && TERAT_CMD='taskcli {} {}' tert 'Q' </dev/null 2>&1 | sed -n 's/^argc=//p')
+out=$(cd /tmp && TERAT_CMD='taskcli {} {}' terat 'Q' </dev/null 2>&1 | sed -n 's/^argc=//p')
 case $out in
 2) ;;
 *) fail "two {} placeholders did not each insert the question (argc=$out)" ;;
@@ -179,7 +202,7 @@ echo REPLAYED
 SH
 chmod +x ~/.local/bin/replaycap
 : >/tmp/replay.sent
-TERAT_THREAD=/tmp/th.replay TERAT_CMD=replaycap tert 'hello' </dev/null >/dev/null 2>&1
+TERAT_THREAD=/tmp/th.replay TERAT_CMD=replaycap terat 'hello' </dev/null >/dev/null 2>&1
 # The question must be the first thing the harness reads.
 [ "$(head -1 /tmp/replay.sent)" = "Question: hello" ] ||
 	fail "the transcript does not open with the question: [$(head -1 /tmp/replay.sent)]"
@@ -201,14 +224,14 @@ sleep 2
 printf 'second\n'
 SH
 chmod +x ~/.local/bin/slowh
-out=$(cd /tmp && TERAT_CMD=slowh tert 'q' </dev/null 2>&1)
+out=$(cd /tmp && TERAT_CMD=slowh terat 'q' </dev/null 2>&1)
 case $out in
 *first*second*) ;;
 *) fail "a slow harness was cut off: [$out]" ;;
 esac
 
 # 6. with no pi installed the failure is explained, not a shell error
-err=$(cd /tmp && PATH=/usr/bin:/bin TERAT_CMD= ~/Projects/terat/tert q </dev/null 2>&1)
+err=$(cd /tmp && PATH=/usr/bin:/bin TERAT_CMD= ~/Projects/terat/terat q </dev/null 2>&1)
 case $err in
 *"pi is not installed"*) ;;
 *) fail "missing-pi message was [$err]" ;;
@@ -263,14 +286,14 @@ fi
 #     answer's own leading newline has to be skipped). A pty is used because
 #     the spinner only draws on a terminal.
 cat > /tmp/spinpty.py <<'PY'
-# tert never prints the question: _terat_line does, so stand in for it. That is
+# terat never prints the question: _terat_line does, so stand in for it. That is
 # the only way to see whether the frame lands on the question's line or the next.
 # A tiny screen model is used rather than the raw bytes because the failure that
 # mattered here was cursor movement overwriting a character, which leaves the
 # byte stream looking correct.
 import os, pty, fcntl, termios, struct, select, sys, re
 
-spin, tert = sys.argv[1], sys.argv[2]
+spin, terat = sys.argv[1], sys.argv[2]
 q = "a question long enough to reach the right hand side of the terminal"
 
 pid, fd = pty.fork()
@@ -281,7 +304,7 @@ if pid == 0:
     # inline leaves the question's line open for the frame; below ends it first
     sys.stdout.write(q if spin == "inline" else q + "\n")
     sys.stdout.flush()
-    os.execv("/bin/sh", ["sh", tert, q])
+    os.execv("/bin/sh", ["sh", terat, q])
 fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 60, 0, 0))
 
 buf = b""
@@ -356,9 +379,9 @@ printf 'the answer\n'
 SH
 chmod +x /tmp/spinanswer.sh
 if command -v python3 >/dev/null 2>&1; then
-	verdict=$(cd /tmp && python3 /tmp/spinpty.py inline ~/Projects/terat/tert 2>&1)
+	verdict=$(cd /tmp && python3 /tmp/spinpty.py inline ~/Projects/terat/terat 2>&1)
 	[ "$verdict" = OK ] || fail "inline spinner: $verdict"
-	verdict=$(cd /tmp && python3 /tmp/spinpty.py - ~/Projects/terat/tert 2>&1)
+	verdict=$(cd /tmp && python3 /tmp/spinpty.py - ~/Projects/terat/terat 2>&1)
 	[ "$verdict" = OK ] || fail "default spinner: $verdict"
 	note="$note+spin"
 fi
