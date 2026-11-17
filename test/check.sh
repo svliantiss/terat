@@ -256,5 +256,112 @@ SH
 	note="$note+capture+stable"
 fi
 
+# 14. TERAT_SPIN=inline draws the spinner on the question's line, not below it.
+#     Two things must hold and both have been wrong here: the frame must not
+#     overwrite the question (a leading \b erased its last character), and it
+#     must not leave a blank line before the answer (wipe ends the line, so the
+#     answer's own leading newline has to be skipped). A pty is used because
+#     the spinner only draws on a terminal.
+cat > /tmp/spinpty.py <<'PY'
+# tert never prints the question: _terat_line does, so stand in for it. That is
+# the only way to see whether the frame lands on the question's line or the next.
+# A tiny screen model is used rather than the raw bytes because the failure that
+# mattered here was cursor movement overwriting a character, which leaves the
+# byte stream looking correct.
+import os, pty, fcntl, termios, struct, select, sys, re
+
+spin, tert = sys.argv[1], sys.argv[2]
+q = "a question long enough to reach the right hand side of the terminal"
+
+pid, fd = pty.fork()
+if pid == 0:
+    os.environ.update({"TERM": "xterm-256color", "TERAT_CMD": "/tmp/spinanswer.sh"})
+    if spin != "-":
+        os.environ["TERAT_SPIN"] = spin
+    # inline leaves the question's line open for the frame; below ends it first
+    sys.stdout.write(q if spin == "inline" else q + "\n")
+    sys.stdout.flush()
+    os.execv("/bin/sh", ["sh", tert, q])
+fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 60, 0, 0))
+
+buf = b""
+while True:
+    r, _, _ = select.select([fd], [], [], 0.15)
+    if r:
+        try:
+            c = os.read(fd, 65536)
+        except OSError:
+            break
+        if not c:
+            break
+        buf += c
+    elif b"the answer" in buf:
+        break
+os.kill(pid, 9)
+
+# escapes first, so the model only ever sees characters the eye would
+text = re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", buf.decode("utf-8", "replace"))
+# screen model: \n newline, \r column 0, \b back one, printable overwrites
+rows, col = [[""]], 0
+for ch in text:
+    if ch == "\n":
+        rows.append([""]); col = 0
+    elif ch == "\r":
+        col = 0
+    elif ch == "\b":
+        col = max(0, col - 1)
+    elif ch.isprintable():
+        r_ = rows[-1]
+        while len(r_) <= col:
+            r_.append(" ")
+        r_[col] = ch
+        col += 1
+rows = ["".join(r) for r in rows]
+
+raw = text
+
+if spin == "inline":
+    # the question must survive the frame: the bug was a \b that stepped back
+    # onto its last character and erased it
+    line = [r for r in rows if "a question long enough" in r]
+    if not line:
+        sys.exit("question line vanished: %r" % rows[:3])
+    # the frame occupies the cell after the text; what must not happen is the
+    # text itself being shortened, which is what a leading \b used to do
+    if "terminal" not in line[0]:
+        sys.exit("the spinner ate the end of the question: %r" % line[0][-30:])
+    # the frame is rewritten in place, which is what keeps it on that line
+    head = raw.split("\n")[0]
+    if "\b" not in head:
+        sys.exit("inline frames were not drawn in place: %r" % head[-40:])
+    # and the answer starts on the next line, with no blank line between
+    idx = [i for i, r in enumerate(rows) if "a question long enough" in r][0]
+    nxt = rows[idx + 1] if idx + 1 < len(rows) else ""
+    if nxt.strip() == "":
+        sys.exit("inline left a blank line before the answer: %r" % rows[:4])
+else:
+    # below: the frame goes on the line after the question
+    idx = [i for i, r in enumerate(rows) if "a question long enough" in r]
+    if not idx:
+        sys.exit("question line vanished: %r" % rows[:3])
+    if not idx[0] + 1 < len(rows) or not rows[idx[0] + 1].strip():
+        sys.exit("default spinner is not on its own line: %r" % rows[:4])
+print("OK")
+PY
+cat > /tmp/spinanswer.sh <<'SH'
+#!/bin/sh
+cat >/dev/null
+sleep 0.7
+printf 'the answer\n'
+SH
+chmod +x /tmp/spinanswer.sh
+if command -v python3 >/dev/null 2>&1; then
+	verdict=$(cd /tmp && python3 /tmp/spinpty.py inline ~/Projects/terat/tert 2>&1)
+	[ "$verdict" = OK ] || fail "inline spinner: $verdict"
+	verdict=$(cd /tmp && python3 /tmp/spinpty.py - ~/Projects/terat/tert 2>&1)
+	[ "$verdict" = OK ] || fail "default spinner: $verdict"
+	note="$note+spin"
+fi
+
 echo "  note=$note"
 echo RESULT=PASS

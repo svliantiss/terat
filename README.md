@@ -557,6 +557,16 @@ A spinner turns on the line below the question and vanishes when the answer
 arrives. pi sometimes prints its answer and then lingers instead of exiting,
 so finishing cannot be inferred from the process ending.
 
+To have the spinner sit on the question's line instead of the one below it:
+
+```
+export TERAT_SPIN=inline
+```
+
+It is drawn over the last cell of the question and erased before the answer, so
+the question is never shortened; only the position of the frame changes. The
+default is `below`, and unsetting the variable returns to it.
+
 It also cannot be inferred from a pause in the output. `pi` is a coding agent:
 asked to create a file, run a test or search a tree, it goes silent while the
 tool works, and a file being created produces no output at all until the write
@@ -617,6 +627,7 @@ question is unaffected.
 | `TERAT_RAW` | `$TMPDIR/terat.$$.raw` | where `tert`-as-shell copies output; removed on exit |
 | `TERAT_SHELL_BIN` | `/bin/zsh` | which shell `tert` starts in normal mode |
 | `TERAT_NAME` | `Pi` | label printed before an answer on a terminal |
+| `TERAT_SPIN` | `below` | `inline` puts the spinner on the question's line; `below` gives it its own |
 | `TERAT_SYMBOL` | `🟅` | the glyph shown in ask mode |
 | `TERAT_GLYPH` | `❯` | the prompt character it stands in for |
 | `TERAT_OTLP` | unset | OTLP/HTTP JSON endpoint; unset means no tracing |
