@@ -476,13 +476,38 @@ Here: README.md archive terat.lua terat.zsh tert
 ```
 
 That is where the shell is and what sits there, capped at 20 names, so it stays
-under a kilobyte even in a directory with hundreds of entries. It lists what
-plain `ls` lists — not dotfiles — because that is what you see on screen and so
-what "those folders" means. A directory holding nothing but dotfiles still gets
-them, and a truncated list ends with `... (38 in all)` so the model knows there
-is more rather than assuming it has seen everything. Scrollback from before,
-other tabs, and file *contents* are still invisible unless you `@`-mention a
-path.
+under a kilobyte even in a directory with hundreds of entries.
+
+The question is sent **first**, and everything else follows under a line that
+says it is context which has already happened:
+
+```
+Question: why did that fail?
+--- context, for reference only; already true, do not act on it ---
+Where: /home/dev/Projects/terat
+Here: README.md tert
+Shell history (commands already run, output already shown):
+cmd: make
+out:
+  gcc: error: no such file
+```
+
+The order is load-bearing, not tidiness. A harness is an agent with a shell: a
+transcript that *opens* with `cmd: rm -rf build` reads like the request, and
+against `pi` a past command in that position was re-executed in about one run
+in three. The question first, plus saying plainly that the rest already
+happened, took that to zero. When the harness is `pi` — the default — one more
+instruction is passed with `--append-system-prompt` saying the same, because
+ordering alone is a strong hint rather than a guarantee. A `TERAT_CMD` of your
+own never gets that flag: you chose a contract, and a flag appearing behind
+your back would turn a working setup into `the harness exited 2`.
+
+It lists what plain `ls` lists — not dotfiles — because that is what you see on
+screen and so what "those folders" means. A directory holding nothing but
+dotfiles still gets them, and a truncated list ends with `... (38 in all)` so
+the model knows there is more rather than assuming it has seen everything.
+Scrollback from before, other tabs, and file *contents* are still invisible
+unless you `@`-mention a path.
 
 Set `TERAT_THREAD` to opt out and keep one conversation everywhere:
 

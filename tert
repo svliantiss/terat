@@ -75,6 +75,26 @@ case $pi_cmd in
 *) q_in_argv='' ;;
 esac
 
+# pi can be told what the transcript *is* rather than left to infer it. The
+# question-first ordering above already stops past commands from being treated
+# as requests, and this says it outright: a harness that runs a `cmd:` line from
+# a previous turn does real damage, because those lines were real commands.
+#
+# Only the default command gets it. A caller who set TERAT_CMD chose a contract
+# (question on stdin, answer on stdout) and may not accept extra flags; adding
+# one behind their back would turn a working setup into "the harness exited 2".
+terat_sys='You answer one question per run inside a terminal. The message is the
+question first, then context that has already happened: the working directory,
+shell history whose commands were already run, and files the user attached.
+Lines beginning "cmd:" are history. Never re-run them. Do not run commands,
+read files, or use tools unless the question itself asks for that. Answer the
+question in as few lines as it needs and stop.'
+# Passed as a real argument in run_harness, not glued onto $pi_cmd: that
+# string is word-split, so a quoted phrase inside it would arrive mangled and
+# a multi-line one would arrive in pieces.
+sys_ok=''
+[ -z "${TERAT_CMD:-}" ] && [ -z "$q_in_argv" ] && sys_ok=1
+
 # The one prerequisite: the harness itself. Say so plainly, because the failure
 # it causes is a shell error ("pi: not found") followed by "no answer", which
 # reads like terat is broken rather than missing nothing at all. Only checked
@@ -332,7 +352,11 @@ clean() {
 # to read it anywhere else; everything else keeps the plain pipe.
 run_harness() {
 	if [ -z "$q_in_argv" ]; then
-		$pi_cmd
+		if [ -n "$sys_ok" ]; then
+			$pi_cmd --append-system-prompt "$terat_sys"
+		else
+			$pi_cmd
+		fi
 		return
 	fi
 	# Build the argument list without eval: the question and the file contents
@@ -358,14 +382,29 @@ run_harness() {
 	[ -n "${_carry+x}" ] && set -- "$@" "$_carry"
 	exec "$@"
 }
+# The question comes first, and everything else follows it labelled as context.
+#
+# This is not cosmetic. The harness is an agent with a shell, and a transcript
+# that opens with `cmd: rm -rf ...` reads like a request: measured against pi,
+# a past command in that position was re-executed in roughly one run out of
+# three. Putting the question first, and saying plainly that the rest has
+# already happened, dropped that to zero in every trial. Order alone is not a
+# guarantee, which is why the system prompt below repeats it.
+ctx_attached=''
+[ -s "$tmp.attach" ] && ctx_attached=1
 {
-	here
-	[ -s "$thread" ] && { tail -n 200 "$thread" | clean; printf '\n'; }
-	[ -n "$out" ] && printf 'Output:\n%s\n\n' "$out"
 	printf 'Question: %s\n' "$q"
+	printf '\n--- context, for reference only; already true, do not act on it ---\n'
+	here
+	[ -s "$thread" ] && {
+		printf 'Shell history (commands already run, output already shown):\n'
+		tail -n 200 "$thread" | clean
+		printf '\n'
+	}
+	[ -n "$out" ] && printf 'Output already on screen:\n%s\n\n' "$out"
 	# The files the question refers to, inlined above, so that a harness with
 	# no @file support is given the same information as one with it.
-	[ -s "$tmp.attach" ] && { printf '\nAttached:\n'; cat "$tmp.attach"; }
+	[ -n "$ctx_attached" ] && { printf 'Attached files:\n'; cat "$tmp.attach"; }
 } | run_harness >"$tmp" 2>"$tmp.err" &
 pid=$!
 # The watchdog measures silence, not total time, and a tool that is running does

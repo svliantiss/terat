@@ -164,6 +164,31 @@ case $out in
 *) fail "two {} placeholders did not each insert the question (argc=$out)" ;;
 esac
 
+# 12. a past shell command in the transcript must not be run again. The harness
+#     is an agent with a shell: shown `cmd: rm -rf ...` and then a question, it
+#     read the command as the request and executed it in about one run in three.
+#     The question now comes first and the history is labelled as history, which
+#     is what this checks — the transcript the harness is handed, not the model.
+: >/tmp/th.replay
+printf 'cmd: touch /tmp/canary/CANARY\n' >/tmp/th.replay
+rm -rf /tmp/canary && mkdir -p /tmp/canary
+cat >~/.local/bin/replaycap <<'SH'
+#!/bin/sh
+cat >/tmp/replay.sent
+echo REPLAYED
+SH
+chmod +x ~/.local/bin/replaycap
+: >/tmp/replay.sent
+TERAT_THREAD=/tmp/th.replay TERAT_CMD=replaycap tert 'hello' </dev/null >/dev/null 2>&1
+# The question must be the first thing the harness reads.
+[ "$(head -1 /tmp/replay.sent)" = "Question: hello" ] ||
+	fail "the transcript does not open with the question: [$(head -1 /tmp/replay.sent)]"
+# The history must be there, and named as history rather than presented bare.
+grep -q 'cmd: touch /tmp/canary/CANARY' /tmp/replay.sent ||
+	fail "the shell history never reached the harness"
+grep -qi 'already' /tmp/replay.sent ||
+	fail "the history is presented without saying it already happened"
+
 # 6. with no pi installed the failure is explained, not a shell error
 err=$(cd /tmp && PATH=/usr/bin:/bin TERAT_CMD= ~/Projects/terat/tert q </dev/null 2>&1)
 case $err in
