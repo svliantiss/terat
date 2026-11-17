@@ -8,3 +8,10 @@ test/.build.log
 
 # Harness state files land in the cwd; they are not project content.
 .grok/
+
+# The release playbook names real paths and key locations on this machine. It is
+# for us, not for consumers: a tracked copy would publish the map the day this
+# repo stops being private. Match the wider suffix too, so a future
+# *.local.md note cannot be swept in by `git add -A` either.
+RELEASE.local.md
+*.local.md
