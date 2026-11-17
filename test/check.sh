@@ -189,6 +189,24 @@ grep -q 'cmd: touch /tmp/canary/CANARY' /tmp/replay.sent ||
 grep -qi 'already' /tmp/replay.sent ||
 	fail "the history is presented without saying it already happened"
 
+# 13. a harness that streams must not be cut off at its first quiet moment. The
+#     grace window exists because a model pauses mid-answer; reading a pause as
+#     "done" printed the first chunk and dropped the rest, which looked like the
+#     prompt eating the answer and sent us hunting through the widget instead.
+cat > ~/.local/bin/slowh <<'SH'
+#!/bin/sh
+cat >/dev/null
+printf 'first\n'
+sleep 2
+printf 'second\n'
+SH
+chmod +x ~/.local/bin/slowh
+out=$(cd /tmp && TERAT_CMD=slowh tert 'q' </dev/null 2>&1)
+case $out in
+*first*second*) ;;
+*) fail "a slow harness was cut off: [$out]" ;;
+esac
+
 # 6. with no pi installed the failure is explained, not a shell error
 err=$(cd /tmp && PATH=/usr/bin:/bin TERAT_CMD= ~/Projects/terat/tert q </dev/null 2>&1)
 case $err in

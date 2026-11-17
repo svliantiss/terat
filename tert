@@ -294,7 +294,10 @@ done_yet() {
 	[ "$size" -gt 0 ] || { last=0; g=0; return 1; }
 	[ "$size" = "$last" ] || { last=$size; g=0; return 1; }
 	g=$((g + 1))
-	[ "$g" -lt "${TERAT_GRACE:-40}" ]
+	# g counts consecutive reads with no new bytes; reaching the grace count
+	# is what "done" means. Comparing the other way ended the run on the first
+	# quiet tick, which is 0.1s into a normal streamed answer.
+	[ "$g" -ge "${TERAT_GRACE:-40}" ]
 }
 
 # Is a tool call still running? A `tool_execution_start` with no matching
