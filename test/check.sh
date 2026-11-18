@@ -10,6 +10,25 @@ fail() { echo "  FAIL $*"; echo RESULT=FAIL; exit 0; }
 echo "  zsh=$(zsh --version 2>/dev/null | cut -d' ' -f1-2)"
 echo "  sh=$(readlink -f /bin/sh 2>/dev/null | sed 's|.*/||')"
 
+# This script installs into $HOME and appends to $HOME/.zshrc, which is correct
+# inside a throwaway container and destructive anywhere else: run on a laptop it
+# adds its source lines to the real zshrc on every run, and the copies under /tmp
+# then shadow the real install in every new shell. A container has no marker, so
+# the marker is the reverse test — if this home already holds a zshrc this script
+# did not write, stop rather than edit it. TERAT_TEST_HOME overrides both, so a
+# host run can point at a scratch directory and mean it.
+if [ "${TERAT_TEST_HOME:-}" != '' ]; then
+	HOME=$TERAT_TEST_HOME
+	export HOME
+	mkdir -p "$HOME"
+elif [ -e ~/.zshrc ] && ! grep -q 'TERAT-TEST-HOME' ~/.zshrc 2>/dev/null; then
+	printf '  SKIP installed-home zshrc exists and is not ours: %s\n' ~/.zshrc
+	printf 'RESULT=SKIP\n'
+	exit 0
+fi
+: >>~/.zshrc
+printf '# TERAT-TEST-HOME\n' >>~/.zshrc
+
 # Install the way the README says, from an empty home.
 mkdir -p ~/Projects/terat ~/.local/bin
 cp -R /src/. ~/Projects/terat/ 2>/dev/null || fail "copy source"

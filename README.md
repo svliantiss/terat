@@ -1000,6 +1000,17 @@ like a pass.
 
 `test/real-pi.md` covers running it against the real `pi` in a container.
 
+The suite installs into `$HOME` and appends to `$HOME/.zshrc`, which is correct
+in a throwaway container and destructive anywhere else: on a laptop that is the
+real zshrc, once per run, and the `/tmp` copies it sources then shadow the real
+install in every new shell. So it refuses to start when the home already holds a
+zshrc it did not write, and `TERAT_TEST_HOME` points it at a scratch directory
+for a host run:
+
+```sh
+TERAT_TEST_HOME=/tmp/terat_home sh test/check.sh
+```
+
 ## Rules
 
 
