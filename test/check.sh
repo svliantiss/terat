@@ -319,6 +319,31 @@ case $got in
 *) fail "terat grok did not select grok: [$got]" ;;
 esac
 
+# 6f. dsh is told where its key is, not handed one inline. `apiKey: <literal>`
+#     is not a field dsh reads: it starts and then says "No API key for
+#     provider", which looks like a bad key rather than a bad config. Only
+#     `apiKeyEnv` plus that variable exported actually authenticates.
+cat >/tmp/dshkeyprobe <<'SH'
+#!/bin/sh
+printf 'KEYVAR=%s EXPORTED=%s\n' \
+	"$(sed -n 's/.*apiKeyEnv: //p' "$DSH_HOME/profiles/headless/cordis.patch.yml")" \
+	"${TERAT_KEY:+yes}"
+SH
+chmod +x /tmp/dshkeyprobe
+export XDG_CONFIG_HOME=/tmp/teratdsh
+rm -rf "$XDG_CONFIG_HOME"
+(terat set url http://127.0.0.1:1/v1 && terat set key sk-dsh && terat set model m1) >/dev/null 2>&1
+got=$(cd /tmp && TERAT_CMD=/tmp/dshkeyprobe ~/Projects/terat/terat dsh q </dev/null 2>&1)
+case $got in
+*'KEYVAR=TERAT_KEY EXPORTED=yes'*) ;;
+*) fail "dsh config was [$got]" ;;
+esac
+case $got in
+*sk-dsh*) fail "the key was written into dsh's config instead of named" ;;
+esac
+rm -rf "$XDG_CONFIG_HOME"
+unset XDG_CONFIG_HOME
+
 # 7. the transcript actually reaches the question: a question can only be
 #    answered from the shell's own history if the history is sent.
 if command -v tmux >/dev/null 2>&1; then

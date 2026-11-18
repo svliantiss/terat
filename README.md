@@ -240,7 +240,7 @@ worth knowing if you would rather keep your own config and skip `terat set`:
 #     config: { provider: myrouter, model: <model> }
 ```
 
-Three traps that cost an afternoon each:
+Four traps that cost an afternoon each:
 
 - **Do not export `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` while using `pi`.**
   pi sees either and stops reading its own `models.json`, then calls that
@@ -253,6 +253,12 @@ Three traps that cost an afternoon each:
   "the selected model may not exist or you may not have access to it" — an error
   about the model, caused by the URL. `terat` strips the suffix for claude only,
   since `grok` and `opencode` do want it.
+- **A dsh provider names its key, it does not hold one.** `apiKeyEnv: TERAT_KEY`
+  is read; a literal `apiKey: sk-...` is silently ignored and dsh then reports
+  `PI_AI_ERROR: No API key for provider: terat` — which reads like a bad key
+  rather than a field dsh does not know. The named variable must also be exported
+  to the child. Verified both ways in the container: `apiKeyEnv` answers,
+  `apiKey` fails.
 - **A dsh install can be internally inconsistent.** `npm i -g @deepseek-ai/dsh`
   cannot resolve a pre-release at all, and pinning an old one (0.1.5-rc.2) pulls
   a *newer* `dsh-base` whose `dsh-sandbox-local` is then missing: dsh dies at
@@ -955,9 +961,12 @@ Two limits are worth knowing before reaching for a different harness:
   `terat` prints the first non-empty line the command wrote to stderr, so a
   missing key or a bad flag is visible instead of appearing as an empty answer.
 
-Only `pi` is exercised by this project's own tests. The others are supported in
-the sense that the contract is plain and the failure modes are visible, not in
-the sense that each one has been verified end to end here.
+Each of the six named agents has been exercised end to end — answering a real
+question through a router — rather than only `pi`. Five were checked on this
+machine; `dsh` was checked in the container, which is also where its
+`apiKeyEnv`-versus-`apiKey` trap was found. That is what keeps the per-agent
+table honest: every row was run, and the two mistakes in it (claude's base URL,
+dsh's key field) were only visible by running it.
 
 ## Tests
 

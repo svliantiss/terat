@@ -308,12 +308,16 @@ if [ -n "$cfg_url$cfg_key$cfg_model" ]; then
 		[ -n "$cfg_key" ] && { TERAT_KEY=$cfg_key; export TERAT_KEY; }
 		codex_extra=$extra ;;
 	dsh)
+		# dsh names an env var rather than holding a key, and the variable has to
+		# be exported for the child to see it. Same shape as the profile patch
+		# this repo already tests against: `apiKeyEnv`, not a literal `apiKey`.
 		ddir=${TMPDIR:-/tmp}/terat.$agent.$$
 		mkdir -p "$ddir/profiles/headless" 2>/dev/null
-		printf -- '- id: llm-pi-ai\n  config:\n    providers:\n      terat:\n        displayName: terat\n        apiKey: %s\n        api: openai-completions\n        baseURL: %s\n        models:\n          - id: %s\n- id: agent-default-model\n  config:\n    provider: terat\n    model: %s\n' \
-			"${cfg_key:-none}" "${cfg_url:-http://127.0.0.1:1/v1}" \
+		printf -- '- id: llm-pi-ai\n  config:\n    providers:\n      terat:\n        displayName: terat\n        apiKeyEnv: TERAT_KEY\n        api: openai-completions\n        baseURL: %s\n        models:\n          - id: %s\n            name: %s\n- id: agent-default-model\n  config:\n    provider: terat\n    model: %s\n' \
+			"${cfg_url:-http://127.0.0.1:1/v1}" "${cfg_model:-none}" \
 			"${cfg_model:-none}" "${cfg_model:-none}" \
 			>"$ddir/profiles/headless/cordis.patch.yml" 2>/dev/null
+		[ -n "$cfg_key" ] && { TERAT_KEY=$cfg_key; export TERAT_KEY; }
 		DSH_HOME=$ddir
 		export DSH_HOME
 		terat_generated=$ddir ;;
