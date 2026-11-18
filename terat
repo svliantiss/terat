@@ -1,9 +1,14 @@
 #!/bin/sh
-# terat - ask pi one question and print the answer.
+# terat - ask an AI one question and print the answer.
 #
 #   terat "why did that build fail?"
 #   terat @shot.png "what is this?"
 #   printf 'why?\n' | terat
+#
+#   terat claude "why did that build fail?"   ask another agent, once
+#   terat set agent claude                    make it the default
+#   terat set url | key | model               where it points, and with what
+#   terat config                              show the settings, key redacted
 #
 # In zsh with terat.zsh loaded, `@` on a line switches the prompt into ask mode.
 
@@ -66,7 +71,267 @@ mkdir -p "${thread%/*}" 2>/dev/null
 # build, a search) is silent for far longer than an answer. `--mode json` emits
 # `agent_end` when the agent is genuinely done, so the wait is exact instead of
 # guessed, and no run is cut off in the middle of doing something.
-pi_cmd=${TERAT_CMD:-pi -p --mode json}
+# --- agents and settings ---------------------------------------------------
+#
+# `terat claude` asks claude instead of pi; `terat set agent claude` makes that
+# the default. Settings live in one file, because the six agents do not agree on
+# anything: two take a URL and key from the environment, two want a config
+# directory, one wants `-c` overrides, two read a file whose path they let you
+# move. That difference is a table here and nowhere else — a wrapper script per
+# agent, or a `case` scattered through the run, is the version that rots.
+#
+# Verified against the real binaries rather than read off help text:
+#   claude    ANTHROPIC_BASE_URL, ANTHROPIC_API_KEY
+#   grok      GROK_BASE_URL, GROK_API_KEY, GROK_MODEL
+#   opencode  OPENCODE_CONFIG_DIR -> opencode.json
+#   codex     -c key=value overrides
+#   pi        PI_CODING_AGENT_DIR -> models.json, settings.json
+#   dsh       DSH_HOME -> profiles/headless/cordis.patch.yml
+terat_cfg=${TERAT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/terat/settings}
+agents='pi claude codex opencode grok dsh'
+
+# One row per agent: how to ask it a question on stdin, and what to call it over
+# the answer. `{}` marks where the question goes for the two that refuse stdin.
+agent_cmd() {
+	case $1 in
+	pi) echo 'pi -p --mode json' ;;
+	claude) echo 'claude -p' ;;
+	codex) echo 'codex exec --skip-git-repo-check' ;;
+	opencode) echo 'opencode run' ;;
+	grok) echo 'grok -p {}' ;;
+	dsh) echo 'dsh --profile headless {}' ;;
+	*) return 1 ;;
+	esac
+}
+
+agent_name() {
+	case $1 in
+	pi) echo Pi ;;
+	claude) echo Claude ;;
+	codex) echo Codex ;;
+	opencode) echo opencode ;;
+	grok) echo Grok ;;
+	dsh) echo dsh ;;
+	*) return 1 ;;
+	esac
+}
+
+# A name that names an agent, rather than a question about one.
+is_agent() { agent_cmd "$1" >/dev/null 2>&1; }
+
+# Read one key. Last line wins, so a key written twice behaves the same whether
+# it got there by `terat set` or by hand.
+cfg_get() {
+	[ -f "$terat_cfg" ] || return 0
+	awk -v k="$1" '
+		index($0, k "=") == 1 { v = substr($0, length(k) + 2) }
+		END { if (v != "") print v }
+	' "$terat_cfg"
+}
+
+# Write one key, dropping any previous line for it. Through a temp file and a
+# rename: an interrupted write must not leave a half-written config behind.
+cfg_set() {
+	mkdir -p "${terat_cfg%/*}" 2>/dev/null
+	# `END` still has to run when the file is missing, which is the first write:
+	# awk exits 2 on a file it cannot open and never reaches END, so an absent
+	# file is fed as empty input instead. Without this the first `terat set`
+	# printed its confirmation and saved nothing.
+	if [ -f "$terat_cfg" ]; then
+		cfg_in=$terat_cfg
+	else
+		cfg_in=/dev/null
+	fi
+	awk -v k="$1" -v v="$2" '
+		index($0, k "=") == 1 { next }
+		{ print }
+		END { print k "=" v }
+	' "$cfg_in" >"$terat_cfg.new" || return 1
+	mv "$terat_cfg.new" "$terat_cfg" || return 1
+	chmod 600 "$terat_cfg" 2>/dev/null
+	return 0
+}
+
+# Subcommands. Both run before anything reads stdin, and neither talks to an
+# agent: they write a file and exit, which is what makes them safe in a script.
+case ${1:-} in
+set)
+	shift
+	key=${1:-}
+	[ "$#" -gt 0 ] && shift
+	val=$*
+	case $key in
+	agent)
+		if [ -z "$val" ]; then
+			cur=$(cfg_get agent)
+			printf '%s\n' "${cur:-pi (default)}"
+			exit 0
+		fi
+		if ! is_agent "$val"; then
+			printf 'terat: no such agent: %s\n' "$val" >&2
+			printf 'terat: try %s\n' "$agents" >&2
+			exit 2
+		fi
+		cfg_set agent "$val" || exit 1
+		# Say whether it can actually run, so a typo lands here rather than at
+		# the next question. Not fatal: installing the agent is the next step.
+		bin=$(agent_cmd "$val" | awk '{print $1}')
+		if command -v "$bin" >/dev/null 2>&1; then
+			printf 'agent=%s\n' "$val"
+		else
+			printf 'agent=%s (but `%s` is not on PATH yet)\n' "$val" "$bin"
+		fi
+		exit 0 ;;
+	url | key | model)
+		if [ -z "$val" ]; then
+			# A key is never printed: it is read by an agent, not by a person,
+			# and a terminal keeps what it shows in scrollback.
+			case $key in
+			key)
+				if [ -n "$(cfg_get key)" ]; then printf 'key=(set)\n'
+				else printf 'key=(unset)\n'
+				fi ;;
+			*) printf '%s=%s\n' "$key" "$(cfg_get "$key")" ;;
+			esac
+			exit 0
+		fi
+		cfg_set "$key" "$val" || exit 1
+		case $key in key) printf 'key=(set)\n' ;; *) printf '%s=%s\n' "$key" "$val" ;; esac
+		exit 0 ;;
+	'')
+		printf 'terat: set what?\n' >&2
+		printf 'terat: set agent %s\n' "$agents" >&2
+		printf 'terat: set url <base url>\n' >&2
+		printf 'terat: set key <api key>\n' >&2
+		printf 'terat: set model <model id>\n' >&2
+		exit 2 ;;
+	*)
+		printf 'terat: cannot set: %s\n' "$key" >&2
+		printf 'terat: try agent, url, key or model\n' >&2
+		exit 2 ;;
+	esac ;;
+config)
+	if [ -f "$terat_cfg" ]; then
+		sed 's/^key=.*/key=(set)/' "$terat_cfg"
+	else
+		printf 'terat: no settings yet; %s does not exist\n' "$terat_cfg"
+	fi
+	exit 0 ;;
+agents)
+	printf '%s\n' $agents
+	exit 0 ;;
+esac
+
+# Which agent answers this question. The command line beats the saved default:
+# `terat set agent claude` is what you normally want, and `terat grok "…"` is
+# how you ask one question of something else.
+agent=$(cfg_get agent)
+agent=${agent:-pi}
+# `--` ends the options, so everything after it is the question. Needed because
+# ask mode sends the question as argv words: without this, asking "claude wrote
+# this" would select the claude agent and lose the word.
+if [ "${1:-}" = '--' ]; then
+	shift
+else
+	case ${1:-} in
+	'' | -*) ;; # no question yet, or a flag rather than a name
+	*)
+		# Only with a question behind it. `terat claude` alone asks the
+		# configured agent about claude; it is not a request to ask claude
+		# nothing, and the word must not be shifted away and lost.
+		if is_agent "$1" && [ "$#" -gt 1 ]; then
+			agent=$1
+			shift
+		fi ;;
+	esac
+fi
+
+# Settings only matter if they reach the agent, and each agent is reached
+# differently. This is all of that difference.
+cfg_url=$(cfg_get url)
+cfg_key=$(cfg_get key)
+cfg_model=$(cfg_get model)
+if [ -n "$cfg_url$cfg_key$cfg_model" ]; then
+	# The model is a command-line flag for the agents that spell one and a field
+	# in the generated file for the two that do not. Sending it as an env var
+	# only worked for grok, which is how this was found: claude quietly fell back
+	# to its own default and asked the router for a model it does not serve.
+	case $agent in
+	claude)
+		# claude appends /v1/messages to this itself, so a base that already
+		# ends in /v1 asks it for /v1/v1/messages and the answer comes back as
+		# "may not exist or you may not have access to it", which reads like a
+		# bad model id and sends you looking in the wrong place.
+		[ -n "$cfg_url" ] && export ANTHROPIC_BASE_URL=${cfg_url%/v1}
+		[ -n "$cfg_url" ] && export ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL%/}
+		[ -n "$cfg_key" ] && export ANTHROPIC_API_KEY=$cfg_key
+		[ -n "$cfg_model" ] && model_arg="--model $cfg_model" ;;
+	grok)
+		[ -n "$cfg_url" ] && export GROK_BASE_URL=$cfg_url
+		[ -n "$cfg_key" ] && export GROK_API_KEY=$cfg_key
+		[ -n "$cfg_model" ] && model_arg="-m $cfg_model" ;;
+	pi)
+		# pi reads providers from models.json inside an agent dir it lets you
+		# move, so the settings become that file. Nothing is written into a
+		# real ~/.pi: a working hand-written setup is left exactly as it was.
+		pdir=${TMPDIR:-/tmp}/terat.$agent.$$
+		mkdir -p "$pdir" 2>/dev/null
+		printf '{"providers":{"terat":{"baseUrl":"%s","api":"openai-completions","apiKey":"%s","models":[{"id":"%s"}]}}}\n' \
+			"${cfg_url:-http://127.0.0.1:1/v1}" "${cfg_key:-none}" "${cfg_model:-none}" \
+			>"$pdir/models.json" 2>/dev/null
+		printf '{"defaultProvider":"terat","defaultModel":"%s"}\n' "${cfg_model:-none}" \
+			>"$pdir/settings.json" 2>/dev/null
+		[ -n "$cfg_model" ] && model_arg="--model $cfg_model"
+		PI_CODING_AGENT_DIR=$pdir
+		export PI_CODING_AGENT_DIR
+		terat_generated=$pdir ;;
+	opencode)
+		odir=${TMPDIR:-/tmp}/terat.$agent.$$
+		mkdir -p "$odir" 2>/dev/null
+		printf '{"$schema":"https://opencode.ai/config.json","provider":{"terat":{"npm":"@ai-sdk/openai-compatible","name":"terat","options":{"baseURL":"%s","apiKey":"%s"},"models":{"%s":{"name":"%s"}}}},"model":"terat/%s"}\n' \
+			"${cfg_url:-http://127.0.0.1:1/v1}" "${cfg_key:-none}" \
+			"${cfg_model:-none}" "${cfg_model:-none}" "${cfg_model:-none}" \
+			>"$odir/opencode.json" 2>/dev/null
+		OPENCODE_CONFIG_DIR=$odir
+		export OPENCODE_CONFIG_DIR
+		terat_generated=$odir ;;
+	codex)
+		# codex has no config-dir variable in this build, but it does take
+		# `-c key=value`, which is a real interface: a file in ~/.codex would
+		# mean editing someone else's config.
+		extra=''
+		[ -n "$cfg_url" ] && extra="$extra -c model_providers.terat.base_url=$cfg_url"
+		[ -n "$cfg_key" ] && extra="$extra -c model_providers.terat.env_key=TERAT_KEY"
+		[ -n "$cfg_model" ] && extra="$extra -c model=$cfg_model"
+		extra="$extra -c model_providers.terat.name=terat -c model_providers.terat.wire_api=responses"
+		[ -n "$cfg_url" ] && extra="$extra -c model_provider=terat"
+		[ -n "$cfg_key" ] && { TERAT_KEY=$cfg_key; export TERAT_KEY; }
+		codex_extra=$extra ;;
+	dsh)
+		ddir=${TMPDIR:-/tmp}/terat.$agent.$$
+		mkdir -p "$ddir/profiles/headless" 2>/dev/null
+		printf -- '- id: llm-pi-ai\n  config:\n    providers:\n      terat:\n        displayName: terat\n        apiKey: %s\n        api: openai-completions\n        baseURL: %s\n        models:\n          - id: %s\n- id: agent-default-model\n  config:\n    provider: terat\n    model: %s\n' \
+			"${cfg_key:-none}" "${cfg_url:-http://127.0.0.1:1/v1}" \
+			"${cfg_model:-none}" "${cfg_model:-none}" \
+			>"$ddir/profiles/headless/cordis.patch.yml" 2>/dev/null
+		DSH_HOME=$ddir
+		export DSH_HOME
+		terat_generated=$ddir ;;
+	esac
+fi
+
+# The label and the command follow the agent, so `terat claude` says `Claude:`
+# and `terat grok` puts the question where grok will read it.
+TERAT_NAME=${TERAT_NAME:-$(agent_name "$agent")}
+TERAT_AGENT=$agent
+export TERAT_NAME TERAT_AGENT
+# TERAT_CMD is the escape hatch and still wins: a caller who spelled a command
+# out meant that command, and replacing it here would ignore them silently.
+if [ -n "${TERAT_CMD:-}" ]; then
+	pi_cmd=$TERAT_CMD
+else
+	pi_cmd="$(agent_cmd "$agent")${model_arg:+ $model_arg}${codex_extra:-}"
+fi
 
 # Some harnesses will not read the question from stdin: grok's -p demands it as
 # an argument, and so does dsh in headless mode. Rather than make every such
@@ -95,18 +360,28 @@ question in as few lines as it needs and stop.'
 # Passed as a real argument in run_harness, not glued onto $pi_cmd: that
 # string is word-split, so a quoted phrase inside it would arrive mangled and
 # a multi-line one would arrive in pieces.
+# Only pi and claude take --append-system-prompt. Sending it to the others is
+# not a degradation, it is a hard failure: codex exits 2 with "unexpected
+# argument", so a first-class agent would look broken on its first question.
 sys_ok=''
-[ -z "${TERAT_CMD:-}" ] && [ -z "$q_in_argv" ] && sys_ok=1
+if [ -z "${TERAT_CMD:-}" ] && [ -z "$q_in_argv" ]; then
+	case $agent in
+	pi | claude) sys_ok=1 ;;
+	esac
+fi
 
-# The one prerequisite: the harness itself. Say so plainly, because the failure
-# it causes is a shell error ("pi: not found") followed by "no answer", which
-# reads like terat is broken rather than missing nothing at all. Only checked
-# for the default command: TERAT_CMD is the caller's business, and a path that
-# does not exist yet is a legitimate thing to test.
-if [ -z "${TERAT_CMD:-}" ] && ! command -v pi >/dev/null 2>&1; then
-	printf 'terat: pi is not installed, and it is what answers the question\n' >&2
-	printf 'terat: install it, or point TERAT_CMD at another harness\n' >&2
-	exit 127
+# The one prerequisite: the agent itself. Said plainly, because the failure it
+# causes is a shell error ("claude: not found") followed by "no answer", which
+# reads like terat is broken rather than missing something to talk to. Only
+# checked when we chose the command: TERAT_CMD is the caller's business, and a
+# path that does not exist yet is a legitimate thing to test.
+if [ -z "${TERAT_CMD:-}" ]; then
+	bin=$(agent_cmd "$agent" | awk '{print $1}')
+	if ! command -v "$bin" >/dev/null 2>&1; then
+		printf 'terat: %s is not installed, and it is what answers the question\n' "$bin" >&2
+		printf 'terat: install it, point TERAT_CMD at another harness, or ask a different agent: %s\n' "$agents" >&2
+		exit 127
+	fi
 fi
 
 # Trace propagation, off unless TERAT_TRACE_ID is set.
@@ -254,6 +529,10 @@ stop_child() {
 tmp_files() {
 	rm -f "$tmp" "$tmp.err" "$tmp.to" "$tmp.stop" "$tmp.stopped" "$tmp.attach" \
 		"$tmp.files" "$tmp.uniq"
+	# The agent's settings were rendered into a directory of their own for this
+	# run. It holds a key, so it goes rather than being left in /tmp.
+	[ -n "${terat_generated:-}" ] && rm -rf "$terat_generated" 2>/dev/null
+	return 0
 }
 
 # A run that ends without an answer: keep the trace (an error is the run whose

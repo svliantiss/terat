@@ -230,11 +230,93 @@ case $out in
 *) fail "a slow harness was cut off: [$out]" ;;
 esac
 
-# 6. with no pi installed the failure is explained, not a shell error
+# 6. with the agent missing the failure is explained, not a shell error
 err=$(cd /tmp && PATH=/usr/bin:/bin TERAT_CMD= ~/Projects/terat/terat q </dev/null 2>&1)
 case $err in
 *"pi is not installed"*) ;;
-*) fail "missing-pi message was [$err]" ;;
+*) fail "missing-agent message was [$err]" ;;
+esac
+
+# 6b. and it names the agent that was actually asked: `terat claude` with no
+#     claude must not say pi, or the message sends you to the wrong install.
+err=$(cd /tmp && PATH=/usr/bin:/bin TERAT_CMD= ~/Projects/terat/terat claude q </dev/null 2>&1)
+case $err in
+*"claude is not installed"*) ;;
+*) fail "missing-claude message was [$err]" ;;
+esac
+
+# 6c. `terat set` writes a setting and reads it back, without asking anything.
+#     A config that only looks saved is worse than none, so this checks the file
+#     too: the first write used to succeed and store nothing, because awk exits 2
+#     on a file it cannot open and never reaches END.
+export XDG_CONFIG_HOME=/tmp/teratcfg
+rm -rf "$XDG_CONFIG_HOME"
+got=$(cd /tmp && terat set agent codex </dev/null 2>&1)
+case $got in
+agent=codex*) ;;
+*) fail "set agent said [$got]" ;;
+esac
+grep -qx 'agent=codex' "$XDG_CONFIG_HOME/terat/settings" || fail "set agent wrote no file"
+got=$(cd /tmp && terat set agent </dev/null 2>&1)
+[ "$got" = codex ] || fail "set agent read back [$got]"
+# a key is never echoed, only acknowledged
+got=$(cd /tmp && terat set key sk-not-a-real-key </dev/null 2>&1)
+[ "$got" = 'key=(set)' ] || fail "set key said [$got]"
+grep -q 'sk-not-a-real-key' "$XDG_CONFIG_HOME/terat/settings" || fail "set key stored nothing"
+got=$(cd /tmp && terat config </dev/null 2>&1)
+case $got in
+*'key=(set)'*) ;;
+*) fail "config did not redact the key: [$got]" ;;
+esac
+case $got in
+*sk-not-a-real-key*) fail "config printed the key" ;;
+esac
+# an unknown agent is refused rather than saved and failed on later
+got=$(cd /tmp && terat set agent nosuchagent </dev/null 2>&1)
+case $got in
+*"no such agent"*) ;;
+*) fail "set agent nosuchagent said [$got]" ;;
+esac
+grep -qx 'agent=codex' "$XDG_CONFIG_HOME/terat/settings" ||
+	fail "a refused agent overwrote the saved one"
+rm -rf "$XDG_CONFIG_HOME"
+unset XDG_CONFIG_HOME
+
+# 6d. `terat <agent>` picks the agent for one question, and the label follows.
+#     Without a real binary the command is still the agent's, so the message has
+#     to name that agent.
+for pair in 'grok Grok' 'dsh dsh' 'opencode opencode'; do
+	set -- $pair
+	got=$(cd /tmp && PATH=/usr/bin:/bin TERAT_CMD= ~/Projects/terat/terat "$1" q </dev/null 2>&1)
+	case $got in
+	*"$1 is not installed"*) ;;
+	*) fail "terat $1 did not choose $1: [$got]" ;;
+	esac
+done
+
+# 6e. `--` keeps a question that begins with an agent name from being taken as
+#     a request for that agent, and keeps the marker out of the question. Ask
+#     mode passes the question as argv words, so this is the interactive case:
+#     asking "claude wrote this" must reach the agent as written.
+cat >/tmp/whichagent <<'SH'
+#!/bin/sh
+printf 'AGENT=%s Q=[%s]\n' "$TERAT_AGENT" "$(sed -n '1s/^Question: //p')"
+SH
+chmod +x /tmp/whichagent
+got=$(cd /tmp && TERAT_CMD=/tmp/whichagent ~/Projects/terat/terat -- claude wrote this </dev/null 2>&1)
+case $got in
+*'AGENT=pi'*) ;;
+*) fail "a question starting with an agent name changed the agent: [$got]" ;;
+esac
+case $got in
+*'Q=[claude wrote this]'*) ;;
+*) fail "the -- marker leaked into the question: [$got]" ;;
+esac
+# and the explicit form still selects, so the escape hatch is not the only way
+got=$(cd /tmp && TERAT_CMD=/tmp/whichagent ~/Projects/terat/terat grok what is this </dev/null 2>&1)
+case $got in
+*'AGENT=grok Q=[what is this]'*) ;;
+*) fail "terat grok did not select grok: [$got]" ;;
 esac
 
 # 7. the transcript actually reaches the question: a question can only be

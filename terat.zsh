@@ -463,7 +463,9 @@ _terat_ask() {
 	_terat_line "$1" "$style"
 	_terat_words "$1"
 	# terat sits next to this file, so sourcing it is enough: no PATH change.
-	TERAT_SPIN=$style command ${_terat_ask_bin:-terat} "${_terat_out[@]}"
+	# `--` first: everything after it is the question, so one that begins with
+	# an agent name ("claude wrote this") is not taken as `terat claude`.
+	TERAT_SPIN=$style command ${_terat_ask_bin:-terat} -- "${_terat_out[@]}"
 	local rc=$?
 	# Ctrl-C while the answer is still arriving leaves the mode here rather
 	# than trusting the trap, which can run after zle has redrawn the prompt.

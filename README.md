@@ -37,12 +37,12 @@ redrawn after the fact — there is no flicker to have.
 
 | File | Job |
 | --- | --- |
-| `terat` | asks pi one question, prints the answer, remembers it |
+| `terat` | asks the chosen agent one question, prints the answer, remembers it |
 | `terat.zsh` | the ask mode: glyph, Enter, `!`, Ctrl-C, plugins off |
 | `terat.lua` | optional: the same thing under a Rex shortcut |
 
-Shell only: `sh`, `sleep`, and `pi`. No python, no jq, no curl — pi does the
-network.
+Shell only: `sh`, `sleep`, `awk`, and one agent. No python, no jq, no curl — the
+agent does the network.
 
 ## Install
 
@@ -57,29 +57,85 @@ ln -sf $PWD/terat ~/.local/bin/terat   # optional: for typing `terat` yourself
 echo "source $PWD/terat.zsh" >> ~/.zshrc   # zsh ask mode
 ```
 
-If `pi` is not installed, `terat` says so and exits rather than relaying a shell
-error:
+If the agent is not installed, `terat` says so and exits rather than relaying a
+shell error:
 
 ```
 🟅 hello
 terat: pi is not installed, and it is what answers the question
-terat: install it, or point TERAT_CMD at another harness
+terat: install it, point TERAT_CMD at another harness, or ask a different agent: pi claude codex opencode grok dsh
 ```
 
-`TERAT_CMD` is the general form: anything that takes the question on stdin and
-writes the answer on stdout can stand in for pi. Claude Code works this way:
+### Choosing an agent
+
+Six agents are wired in by name, so there is no command string to remember:
 
 ```sh
-TERAT_CMD='claude -p' terat 'why is the build failing?'
+terat claude 'why is the build failing?'   # ask claude for one question
+terat set agent claude                      # ask claude from now on
 ```
 
-It follows the same contract — question on stdin, answer on stdout — and exits
-when it is done, so the wait is exact. Set `TERAT_NAME=Claude` if you would
-rather the label read `Claude:` than `Pi:`.
+| name | asks it with | `@file` | url/key reaches it through |
+|---|---|---|---|
+| `pi` | `pi -p --mode json` (the default) | yes | `PI_CODING_AGENT_DIR` → `models.json` |
+| `claude` | `claude -p` | yes | `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY` |
+| `codex` | `codex exec --skip-git-repo-check` | yes | `-c key=value` overrides |
+| `opencode` | `opencode run` | yes | `OPENCODE_CONFIG_DIR` → `opencode.json` |
+| `grok` | `grok -p {}` | yes | `GROK_BASE_URL`, `GROK_API_KEY` |
+| `dsh` | `dsh --profile headless {}` | yes | `DSH_HOME` → profile patch |
+
+Those last-column differences are the reason a name beats a command string. Each
+agent takes its endpoint somewhere else, and getting that wrong fails quietly: a
+`claude` whose base URL ends in `/v1` is asked for `/v1/v1/messages` and answers
+"the selected model may not exist or you may not have access to it", which reads
+like a bad model id. `terat` normalises that one, and generates the JSON or YAML
+the file-based agents need in a directory of their own under `$TMPDIR`, removed
+after the answer. Nothing is written into your real `~/.pi`, `~/.codex`,
+`~/.config/opencode` or `~/.dsh`, so a setup that already works is left alone.
+
+### Endpoint, key and model
+
+```sh
+terat set url https://router.example/v1
+terat set key sk-...
+terat set model some/model
+terat config
+```
+
+```
+url=https://router.example/v1
+key=(set)
+model=some/model
+```
+
+Settings live in `~/.config/terat/settings` (mode `600`), one `key=value` per
+line, so they are readable and hand-editable and survive re-cloning the repo.
+`terat set key` never echoes the key back; `terat config` prints `key=(set)`.
+`XDG_CONFIG_HOME` and `TERAT_CONFIG` relocate the file.
+
+`terat set` writes a file and exits — it never asks an agent anything, which is
+what makes it safe to run from a script.
+
+`TERAT_CMD` remains the general form and still wins over all of this, for a
+harness that is not one of the six: anything that takes the question on stdin and
+writes the answer on stdout can stand in.
+
+```sh
+TERAT_CMD='some-agent -p' terat 'why is the build failing?'
+```
 
 A harness that wants the question as an *argument* instead of on stdin needs no
-wrapper: put `{}` where the question goes and `terat` fills it in (see [harnesses
-that want the question as an argument](#harnesses-that-want-the-question-as-an-argument)).
+wrapper either: put `{}` where the question goes and `terat` fills it in (see
+[harnesses that want the question as an argument](#harnesses-that-want-the-question-as-an-argument)).
+
+When a question itself begins with an agent name — `claude wrote this` — pass `--`
+first and the word is taken as part of the question:
+
+```sh
+terat -- claude wrote this
+```
+
+Ask mode always does this, so the interactive path needs no such thought.
 
 | harness | answers | `@file` | `TERAT_CMD` |
 |---|---|---|---|
@@ -146,25 +202,28 @@ argument missing", and a pipe of stdin to it is silently discarded; `dsh` says
 
 ### Wiring each one in
 
+The six named agents do this for you: `terat set url`/`key`/`model` generates
+what each one needs. The shapes below are what that generation produces, and are
+worth knowing if you would rather keep your own config and skip `terat set`:
+
 ```sh
 # codex: 0.169 rejects wire_api = "chat" outright and speaks only the responses
-# API. In ~/.codex/config.toml:
+# API. terat passes these as `-c` overrides, which codex accepts on the command
+# line; the equivalent in ~/.codex/config.toml is:
 #   model = "<model>"
-#   model_provider = "myrouter"
-#   [model_providers.myrouter]
-#   name = "myrouter"
+#   model_provider = "terat"
+#   [model_providers.terat]
+#   name = "terat"
 #   base_url = "https://.../v1"
 #   env_key = "ROUTER_KEY"
 #   wire_api = "responses"
 
 # claude is an Anthropic-shaped client, so it needs its own base URL and key and
-# a model id the endpoint actually serves. Keep them in a two-line wrapper so
-# they are scoped to claude and not exported into everything else:
-cat > ~/.local/bin/claude-ask <<'SH'
-#!/bin/sh
-ANTHROPIC_BASE_URL=https://... ANTHROPIC_API_KEY=$ROUTER_KEY \
-	exec claude -p --model <model> "$@"
-SH
+# a model id the endpoint actually serves. terat exports these for the run only.
+# Note the base URL has no /v1 on the end: claude appends /v1/messages itself.
+#   ANTHROPIC_BASE_URL=https://...
+#   ANTHROPIC_API_KEY=$ROUTER_KEY
+#   claude -p --model <model>
 
 # dsh reads its provider from the profile patch layer. Note that DSH_HOME is not
 # always ~/.dsh (on macOS this build uses
@@ -181,12 +240,19 @@ SH
 #     config: { provider: myrouter, model: <model> }
 ```
 
-Two traps that cost an afternoon each:
+Three traps that cost an afternoon each:
 
 - **Do not export `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` while using `pi`.**
   pi sees either and stops reading its own `models.json`, then calls that
-  provider directly and fails. Scope the credential to the harness that needs
-  it, as the samples above do.
+  provider directly and fails. This is why the credential is scoped to the agent
+  that wants it: `terat claude` exports `ANTHROPIC_API_KEY` for that run only,
+  and `terat pi` never sees it. Verified rather than assumed — a key configured
+  for claude does not appear in pi's environment.
+- **claude's base URL must not end in `/v1`.** It appends `/v1/messages` itself,
+  so `https://host/v1` becomes `/v1/v1/messages` and the failure is reported as
+  "the selected model may not exist or you may not have access to it" — an error
+  about the model, caused by the URL. `terat` strips the suffix for claude only,
+  since `grok` and `opencode` do want it.
 - **A dsh install can be internally inconsistent.** `npm i -g @deepseek-ai/dsh`
   cannot resolve a pre-release at all, and pinning an old one (0.1.5-rc.2) pulls
   a *newer* `dsh-base` whose `dsh-sandbox-local` is then missing: dsh dies at
@@ -626,7 +692,9 @@ question is unaffected.
 | `TERAT_THREAD` | `~/.terat/thread.$$` | transcript sent as context, one per shell |
 | `TERAT_RAW` | `$TMPDIR/terat.$$.raw` | where `terat`-as-shell copies output; removed on exit |
 | `TERAT_SHELL_BIN` | `/bin/zsh` | which shell `terat` starts in normal mode |
-| `TERAT_NAME` | `Pi` | label printed before an answer on a terminal |
+| `TERAT_AGENT` | `pi` | which agent answers; set by `terat set agent` or `terat <name>` |
+| `TERAT_NAME` | the agent's name | label printed before an answer on a terminal |
+| `TERAT_CONFIG` | `~/.config/terat/settings` | where `terat set` keeps url, key and model |
 | `TERAT_SPIN` | `below` | `inline` puts the spinner on the question's line; `below` gives it its own |
 | `TERAT_SYMBOL` | `🟅` | the glyph shown in ask mode |
 | `TERAT_GLYPH` | `❯` | the prompt character it stands in for |
@@ -822,9 +890,10 @@ join lives in router's own database rather than in a trace backend.
 
 ### Which model answers
 
-`terat` runs whatever `pi -p` resolves to, so the model is pi's business, not
-terat's. On a machine where Passy Me is running, its local router is the route
-that uses a subscription rather than a metered key:
+With no settings at all, `terat` runs whatever `pi -p` resolves to, so the model
+stays pi's business. On a machine where Passy Me is running, its local router is
+the route that uses a subscription rather than a metered key. Either point pi at
+it by hand:
 
 ```jsonc
 // ~/.pi/agent/models.json
@@ -842,10 +911,24 @@ that uses a subscription rather than a metered key:
 "defaultModel": "some/model"
 ```
 
+Or let terat write those two files for the run, which is what this does:
+
+```sh
+terat set url https://router.example.com/v1
+terat set key router_...
+terat set model some/model
+```
+
 Then `pi -p` routes there by default and `terat` needs no change. Check it with
 `pi --list-models`, or ask `terat` and watch which route is used in the pi log.
 A metered key (`api.passy.ai`) answers as the same model family but bills per
 token; the subscription ids end in `-subscription` and only exist on the router.
+
+A route that works for one agent does not always work for another: claude speaks
+the Anthropic Messages API and needs a model id the endpoint serves under that
+API (`passy/aws-bedrock/claude-sonnet-4-6`, say), where pi, grok and opencode
+speak the OpenAI one. Per-agent settings are the same file, so switching agent
+means switching model too.
 
 ### Other harnesses
 
@@ -891,7 +974,15 @@ bookworm, Ubuntu, Fedora, Alpine, Amazon Linux, bullseye (zsh 5.8) and Arch
 `zsh` and `awk`; a question gets an answer; piped output stays raw; the prompt
 becomes `🟅` through a real pty; the program's bare name typed at the prompt
 flips the mode rather than being asked of the model; the transcript reaches the
-question; and a missing `pi` is explained instead of relaying a shell error.
+question; and a missing agent is explained instead of relaying a shell error,
+naming the agent that was actually asked.
+
+The config layer is covered too, because a setting that only looks saved is
+worse than none: `terat set` writes the file and reads it back, a refused agent
+does not overwrite the saved one, a key is stored but never echoed, and `--`
+keeps a question that begins with an agent name (`claude wrote this`) from being
+taken as a request for that agent — including keeping the `--` out of the
+question the model sees.
 
 The suite is falsified on purpose: delete the transcript line or the glyph
 fallback and it goes red, so a green run means something. Build failures are
