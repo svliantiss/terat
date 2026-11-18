@@ -29,10 +29,15 @@ fi
 : >>~/.zshrc
 printf '# TERAT-TEST-HOME\n' >>~/.zshrc
 
-# Install the way the README says, from an empty home.
-mkdir -p ~/Projects/terat ~/.local/bin
-cp -R /src/. ~/Projects/terat/ 2>/dev/null || fail "copy source"
-chmod +x ~/Projects/terat/terat
+# Install the way the README says, from an empty home. Everything the suite
+# needs to fake goes in $D, beside terat, and never in ~/.local/bin: on a real
+# machine `~/.local/bin/pi` can be a symlink to a managed install, and a `>`
+# through it overwrites the agent instead of testing ours. That is not
+# hypothetical — it happened, and had to be restored by hand.
+D=$HOME/Projects/terat
+mkdir -p "$D"
+cp -R /src/. "$D/" 2>/dev/null || fail "copy source"
+chmod +x "$D/terat"
 
 # 1. parses under this distro's sh, zsh and awk
 sh -n ~/Projects/terat/terat || fail "sh -n terat"
@@ -41,16 +46,15 @@ awk -f ~/Projects/terat/terat-trace.awk /dev/null || fail "awk parse"
 
 # A stand-in for pi: this suite is about terat, and no container has credentials.
 # Real pi is covered separately in test/real-pi.md.
-cat > ~/.local/bin/pi <<'SH'
+cat > $D/pi <<'SH'
 #!/bin/sh
 cat >/dev/null
 printf '{"type":"session","cwd":"/t"}\n'
 printf '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"ANSWER_OK"}]}}\n'
 printf '{"type":"agent_end"}\n'
 SH
-chmod +x ~/.local/bin/pi
-ln -sf ~/Projects/terat/terat ~/.local/bin/terat
-export PATH="$HOME/.local/bin:$PATH"
+chmod +x $D/pi
+export PATH="$D:$PATH"
 
 # 2. a question gets an answer; piped output is raw, with no label
 ans=$(cd /tmp && terat 'q' </dev/null 2>&1)
@@ -65,7 +69,7 @@ if command -v tmux >/dev/null 2>&1; then
 	# `$(...)` source instead of a prompt, losing the glyph, the colours and the
 	# ~, and landing the cursor a row off. A single source in the test could
 	# never catch that.
-	printf 'export PATH="$HOME/.local/bin:$PATH"\nsource ~/Projects/terat/terat.zsh\nsource ~/Projects/terat/terat.zsh\n' >>~/.zshrc
+	printf 'export PATH="$D:$PATH"\nsource ~/Projects/terat/terat.zsh\nsource ~/Projects/terat/terat.zsh\n' >>~/.zshrc
 	tmux new-session -d -s T -x 100 -y 30 "zsh -i"
 	# Wait for the prompt to be ready rather than guessing: under qemu a
 	# `zsh -i` start-up and a fork can both take seconds, and a fixed sleep
@@ -124,12 +128,12 @@ fi
 
 # 4. a plain-text harness works too: no json events, no agent_end, answer on
 #    stdout. This is the claude/cursor/dsh shape, and it must not need pi.
-cat > ~/.local/bin/plainh <<'SH'
+cat > $D/plainh <<'SH'
 #!/bin/sh
 cat >/dev/null
 printf '   PLAIN_TEXT_ANSWER\n'
 SH
-chmod +x ~/.local/bin/plainh
+chmod +x $D/plainh
 ans=$(cd /tmp && TERAT_CMD=plainh terat 'q' </dev/null 2>&1)
 [ "$ans" = "   PLAIN_TEXT_ANSWER" ] ||
 	fail "plain-text harness answered [$ans]"
@@ -137,13 +141,13 @@ ans=$(cd /tmp && TERAT_CMD=plainh terat 'q' </dev/null 2>&1)
 # 5. a harness that fails must not have its complaint served as the answer.
 #    A CLI run by hand says why on stdout and exits 1; that text is an error,
 #    not a reply, and printing it reads like the model answered.
-cat > ~/.local/bin/angry <<'SH'
+cat > $D/angry <<'SH'
 #!/bin/sh
 cat >/dev/null
 printf 'rate limited, retry later\n'
 exit 1
 SH
-chmod +x ~/.local/bin/angry
+chmod +x $D/angry
 out=$(cd /tmp && TERAT_CMD=angry terat 'q' </dev/null 2>&1)
 case $out in
 *"exited 1"*) ;;
@@ -154,14 +158,14 @@ esac
 #    failure. pi stays alive after agent_end, so terat stops it and `wait` comes
 #    back with 143. Reading that as "the harness failed" hides a good answer
 #    behind an error, which is worse than either on its own.
-cat > ~/.local/bin/stubborn <<'SH'
+cat > $D/stubborn <<'SH'
 #!/bin/sh
 cat >/dev/null
 printf '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"STUBBORN_OK"}]}}\n'
 printf '{"type":"agent_end"}\n'
 sleep 600
 SH
-chmod +x ~/.local/bin/stubborn
+chmod +x $D/stubborn
 out=$(cd /tmp && TERAT_CMD=stubborn terat 'q' </dev/null 2>&1)
 case $out in
 *STUBBORN_OK*) ;;
@@ -172,11 +176,11 @@ esac
 #    file. Only some harnesses understand @path; a path handed to one that does
 #    not is silently useless, and the model answers about the path.
 printf 'the code is TANGERINE\n' >/tmp/attach.txt
-cat > ~/.local/bin/echoall <<'SH'
+cat > $D/echoall <<'SH'
 #!/bin/sh
 cat
 SH
-chmod +x ~/.local/bin/echoall
+chmod +x $D/echoall
 out=$(cd /tmp && TERAT_CMD=echoall terat 'what is the code?' @attach.txt </dev/null 2>&1)
 case $out in
 *TANGERINE*) ;;
@@ -186,12 +190,12 @@ esac
 # 10. a task-style harness (grok -p, dsh --profile headless) refuses stdin, so
 #     `{}` puts the question on the command line instead. It must arrive as one
 #     argument, with spaces and shell syntax intact and not executed.
-cat > ~/.local/bin/taskcli <<'SH'
+cat > $D/taskcli <<'SH'
 #!/bin/sh
 printf 'argc=%s\n' "$#"
 for a in "$@"; do printf 'ARG[%s]\n' "$a"; done
 SH
-chmod +x ~/.local/bin/taskcli
+chmod +x $D/taskcli
 out=$(cd /tmp && TERAT_CMD='taskcli --flag {} --tail' terat 'say "hi" && echo $HOME' </dev/null 2>&1)
 case $out in
 *'ARG[--flag]'*'Question: say "hi" && echo $HOME'*'ARG[--tail]'*) ;;
@@ -214,12 +218,12 @@ esac
 : >/tmp/th.replay
 printf 'cmd: touch /tmp/canary/CANARY\n' >/tmp/th.replay
 rm -rf /tmp/canary && mkdir -p /tmp/canary
-cat >~/.local/bin/replaycap <<'SH'
+cat >$D/replaycap <<'SH'
 #!/bin/sh
 cat >/tmp/replay.sent
 echo REPLAYED
 SH
-chmod +x ~/.local/bin/replaycap
+chmod +x $D/replaycap
 : >/tmp/replay.sent
 TERAT_THREAD=/tmp/th.replay TERAT_CMD=replaycap terat 'hello' </dev/null >/dev/null 2>&1
 # The question must be the first thing the harness reads.
@@ -235,14 +239,14 @@ grep -qi 'already' /tmp/replay.sent ||
 #     grace window exists because a model pauses mid-answer; reading a pause as
 #     "done" printed the first chunk and dropped the rest, which looked like the
 #     prompt eating the answer and sent us hunting through the widget instead.
-cat > ~/.local/bin/slowh <<'SH'
+cat > $D/slowh <<'SH'
 #!/bin/sh
 cat >/dev/null
 printf 'first\n'
 sleep 2
 printf 'second\n'
 SH
-chmod +x ~/.local/bin/slowh
+chmod +x $D/slowh
 out=$(cd /tmp && TERAT_CMD=slowh terat 'q' </dev/null 2>&1)
 case $out in
 *first*second*) ;;
@@ -366,14 +370,14 @@ unset XDG_CONFIG_HOME
 # 7. the transcript actually reaches the question: a question can only be
 #    answered from the shell's own history if the history is sent.
 if command -v tmux >/dev/null 2>&1; then
-	cat > ~/.local/bin/pi <<'SH'
+	cat > $D/pi <<'SH'
 #!/bin/sh
 cat >/tmp/q.txt
 printf '{"type":"session","cwd":"/t"}\n'
 printf '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"ANSWER_OK"}]}}\n'
 printf '{"type":"agent_end"}\n'
 SH
-	chmod +x ~/.local/bin/pi
+	chmod +x $D/pi
 	tmux new-session -d -s C -x 110 -y 30 "zsh -i"
 	sleep 2
 	tmux send-keys -t C 'echo CAPTURE_MARKER_XYZ' Enter
