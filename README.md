@@ -401,6 +401,7 @@ The prefix is the whole interface: `@` at an empty prompt turns it into ask mode
 | `!ls` | runs the command, stays in the mode |
 | `#src` | attaches that folder's files to your question |
 | `terat` | flips in place, either direction |
+| `Ctrl+X t` | traces this session on or off, and says which |
 | `Ctrl+C` / empty Return | leaves the mode |
 
 Everything else is the shell you already had: same prompt, same path, same
