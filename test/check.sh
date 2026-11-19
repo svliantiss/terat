@@ -99,8 +99,23 @@ if command -v tmux >/dev/null 2>&1; then
 		done
 		return 1
 	}
+	sleep 2
 	_terat_trace_key on || fail "pty: Ctrl+X t did not turn tracing on; screen was [$(grep -v '^[[:space:]]*$' /tmp/scrtrace.txt | tail -4 | tr '\n' '|')]"
 	_terat_trace_key off || fail "pty: Ctrl+X t did not turn tracing off again; screen was [$(grep -v '^[[:space:]]*$' /tmp/scrtrace.txt | tail -4 | tr '\n' '|')]"
+	# The `%` above matches the *default* zsh prompt too, so it says the shell is
+	# up, not that terat.zsh has loaded. Everything below needs the widget to
+	# exist: sent before it does, `@hello` runs as a command and the keypress is
+	# read by nothing. Ask the shell directly instead of inferring from the
+	# screen, which is the only signal that is actually about readiness.
+	tmux send-keys -t T 'whence -w _terat_accept >/dev/null && echo TERAT_READY' Enter
+	i=0
+	while [ $i -lt 40 ]; do
+		sleep 1
+		tmux capture-pane -pt T >/tmp/scrready.txt 2>/dev/null
+		grep -q 'TERAT_READY' /tmp/scrready.txt && break
+		i=$((i + 1))
+	done
+	grep -q 'TERAT_READY' /tmp/scrready.txt || fail "pty: terat.zsh never loaded in the shell"
 	tmux send-keys -t T '@hello' Enter
 	# Same here: poll for the label instead of assuming a fixed latency.
 	i=0
