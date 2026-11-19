@@ -8,6 +8,7 @@
 #   terat claude "why did that build fail?"   ask another agent, once
 #   terat set agent claude                    make it the default
 #   terat set url | key | model               where it points, and with what
+#   terat models [name]                       what the endpoint serves
 #   terat config                              show the settings, key redacted
 #
 # In zsh with terat.zsh loaded, `@` on a line switches the prompt into ask mode.
@@ -203,11 +204,11 @@ set)
 		printf 'terat: set agent %s\n' "$agents" >&2
 		printf 'terat: set url <base url>\n' >&2
 		printf 'terat: set key <api key>\n' >&2
-		printf 'terat: set model <model id>\n' >&2
+		printf 'terat: set model <model id>   (terat models shows them)\n' >&2
 		exit 2 ;;
 	*)
 		printf 'terat: cannot set: %s\n' "$key" >&2
-		printf 'terat: try agent, url, key or model\n' >&2
+		printf 'terat: try agent, url, key or model; terat models lists them\n' >&2
 		exit 2 ;;
 	esac ;;
 config)
@@ -219,6 +220,45 @@ config)
 	exit 0 ;;
 agents)
 	printf '%s\n' $agents
+	exit 0 ;;
+models)
+	# `shift` first: inside this branch $1 is the word `models`, so a filter
+	# read from $1 would always be the literal "models" and match nothing.
+	shift
+	# What the endpoint serves, so a model can be named rather than guessed.
+	# Reads the router's own list, which needs no key — so this works before
+	# `terat set key` and cannot leak what it does not have. One id per line,
+	# with `vision` first when the server says the model takes images: that
+	# distinction changes the answer, and is the reason terat writes `input`
+	# into the configs it generates.
+	url=$(cfg_get url)
+	[ -n "$url" ] || { printf 'terat: no endpoint yet; terat set url <url>\n' >&2; exit 2; }
+	json=$(curl -s -m 20 "$url/models" 2>/dev/null) ||
+		wget -q -T 20 -O - "$url/models" 2>/dev/null || {
+		printf 'terat: could not read %s/models\n' "${url%/}" >&2
+		exit 1
+	}
+	[ -n "$json" ] || { printf 'terat: %s/models returned nothing\n' "${url%/}" >&2; exit 1; }
+	printf '%s' "$json" | tr -d '\n\r' | awk -v filter="${1:-}" '
+	{
+		s = $0
+		while ((i = index(s, "\"id\":")) > 0) {
+			s = substr(s, i + 5)
+			sub(/^[ \t]*"/, "", s)
+			n = index(s, "\"")
+			if (n == 0) break
+			id = substr(s, 1, n - 1)
+			s = substr(s, n + 1)
+			# The record ends where the next one begins; splitting there keeps
+			# a nested object from being read as part of this model.
+			j = index(s, "\"id\":")
+			body = (j > 0) ? substr(s, 1, j - 1) : s
+			s = (j > 0) ? substr(s, j) : ""
+			if (id == "") continue
+			if (filter != "" && index(id, filter) == 0) continue
+			printf "%s%s\n", ((body ~ /"image"/) ? "vision\t" : "text\t"), id
+		}
+	}'
 	exit 0 ;;
 esac
 

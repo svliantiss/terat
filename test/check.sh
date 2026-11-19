@@ -469,6 +469,56 @@ printf '{"type":"message_end","message":{"role":"assistant","content":[{"type":"
 printf '{"type":"agent_end"}\n'
 SH
 chmod +x $D/pi
+# 6j. `terat models` names what the endpoint serves, and marks the ones that
+#     take images. A model can be used without it, but only by already knowing
+#     the id — and the image flag is what silently changes an answer, so it has
+#     to come from the server rather than from a guess about the name.
+#
+#     Served from a shell loop rather than python: the containers carry zsh,
+#     tmux, curl, gawk and netcat but no interpreter, and a claim that quietly
+#     needs one skips itself and still reports PASS.
+if command -v nc >/dev/null 2>&1; then
+	port=18771
+	cat >/tmp/modelsrv.sh <<SH
+#!/bin/sh
+resp() {
+	printf 'HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\n\r\n'
+	printf '%s' '{"object":"list","data":[{"id":"plain/model","capabilities":{"input_modalities":["text"]}},{"id":"sees/model","capabilities":{"input_modalities":["text","image"]}},{"id":"bare/model"}]}'
+}
+i=0
+while [ \$i -lt 4 ]; do
+	resp | nc -l 127.0.0.1 $port >/dev/null 2>&1
+	i=\$((i + 1))
+done
+SH
+	chmod +x /tmp/modelsrv.sh
+	/tmp/modelsrv.sh >/dev/null 2>&1 &
+	srvpid=$!
+	sleep 0.5
+	XDG_CONFIG_HOME=$(mktemp -d)
+	export XDG_CONFIG_HOME
+	terat set url "http://127.0.0.1:$port/v1" >/dev/null 2>&1
+	terat models >/tmp/mlist.txt 2>&1
+	want='text	plain/model
+vision	sees/model
+text	bare/model'
+	got=$(cat /tmp/mlist.txt)
+	[ "$got" = "$want" ] || fail "terat models is wrong: [$got]"
+	# A filter narrows by name without changing the flag.
+	terat models sees >/tmp/mfilt.txt 2>&1
+	[ "$(cat /tmp/mfilt.txt)" = "vision	sees/model" ] ||
+		fail "terat models filter is wrong: [$(cat /tmp/mfilt.txt)]"
+	kill $srvpid 2>/dev/null
+	wait $srvpid 2>/dev/null
+	# With no endpoint it must say so rather than print nothing and succeed.
+	XDG_CONFIG_HOME=$(mktemp -d)
+	export XDG_CONFIG_HOME
+	if terat models >/tmp/mnone.txt 2>&1; then fail "terat models succeeded with no endpoint"; fi
+	grep -q 'no endpoint' /tmp/mnone.txt || fail "terat models did not name the missing endpoint"
+	rm -rf "$XDG_CONFIG_HOME"
+	unset XDG_CONFIG_HOME
+fi
+
 
 # 7. the transcript actually reaches the question: a question can only be
 #    answered from the shell's own history if the history is sent.

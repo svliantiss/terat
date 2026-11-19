@@ -97,6 +97,7 @@ after the answer. Nothing is written into your real `~/.pi`, `~/.codex`,
 
 ```sh
 terat set url https://router.example/v1
+terat models                # what that endpoint serves, one per line
 terat set key sk-...
 terat set model some/model
 terat config
@@ -107,6 +108,27 @@ url=https://router.example/v1
 key=(set)
 model=some/model
 ```
+
+`terat models` asks the endpoint for its own list, so a model is named rather
+than guessed from a docs page. Each line is `vision` or `text`, then the id:
+
+```
+vision	passy/Qwen3-VL-235B-A22B-Instruct
+text	passy/DeepSeek-V4-Flash
+```
+
+The first column is not decoration. A model that cannot take images drops an
+attached file before the request is sent, and the reply then reads as the
+model's own limitation rather than as a property of what was configured — so
+knowing which ids can see a screenshot is what makes
+`terat @shot.png "what is this?"` worth typing. `terat models qwen` narrows by
+substring.
+
+Reading the list needs no key, and nothing is cached: a stale list is worse than
+a slow one when the router is the thing that knows. An endpoint that does not
+serve `/models` still works with `terat set model` — the id is only checked by
+the agent that receives it.
+
 
 Settings live in `~/.config/terat/settings` (mode `600`), one `key=value` per
 line, so they are readable and hand-editable and survive re-cloning the repo.
