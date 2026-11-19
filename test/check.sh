@@ -427,6 +427,49 @@ rm -rf "$XDG_CONFIG_HOME"
 unset XDG_CONFIG_HOME
 terat set agent pi >/dev/null 2>&1
 
+# 6i. the generated config holds the key, so it must not be readable by other
+#     users. `>` takes the umask (normally 022), which left a key-bearing file
+#     at 644 next to a 600 settings file — the same secret, two permissions.
+cat > $D/pi <<'SH'
+#!/bin/sh
+cat >/dev/null
+# Column 1 only: macOS appends an `@` for extended attributes, which is not
+# part of the permission bits and would fail a correct 600/700.
+ls -ld "$PI_CODING_AGENT_DIR" "$PI_CODING_AGENT_DIR/models.json" 2>/dev/null |
+	awk '{print $1}' | tr -d '@' > /tmp/perm.txt
+printf '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"X"}]}}\n'
+printf '{"type":"agent_end"}\n'
+SH
+chmod +x $D/pi
+rm -f /tmp/perm.txt
+XDG_CONFIG_HOME=$(mktemp -d)
+export XDG_CONFIG_HOME
+terat set url http://127.0.0.1:9/v1 >/dev/null 2>&1
+terat set key sk-not-a-real-key >/dev/null 2>&1
+terat set model mm >/dev/null 2>&1
+terat q </dev/null >/dev/null 2>&1
+# Accept only 700 on the dir and 600 on the file: any group/other bit on either
+# exposes the key to another user on the same machine.
+# Cleared first: the writes below are conditional, so a verdict left over from
+# an earlier run would otherwise stand in for this one.
+rm -f /tmp/permbad.txt
+# First line is the directory, second the file it holds.
+sed -n 1p /tmp/perm.txt 2>/dev/null | grep -qx 'drwx------' ||
+	echo "key dir is $(sed -n 1p /tmp/perm.txt 2>/dev/null)" >/tmp/permbad.txt
+sed -n 2p /tmp/perm.txt 2>/dev/null | grep -qx -- '-rw-------' ||
+	echo "key file is $(sed -n 2p /tmp/perm.txt 2>/dev/null)" >>/tmp/permbad.txt
+[ -s /tmp/permbad.txt ] && fail "generated pi config is not private: $(tr '\n' ' ' </tmp/permbad.txt)"
+rm -rf "$XDG_CONFIG_HOME"
+unset XDG_CONFIG_HOME
+cat > $D/pi <<'SH'
+#!/bin/sh
+cat >/dev/null
+printf '{"type":"session","cwd":"/t"}\n'
+printf '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"ANSWER_OK"}]}}\n'
+printf '{"type":"agent_end"}\n'
+SH
+chmod +x $D/pi
+
 # 7. the transcript actually reaches the question: a question can only be
 #    answered from the shell's own history if the history is sent.
 if command -v tmux >/dev/null 2>&1; then

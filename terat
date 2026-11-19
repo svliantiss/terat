@@ -278,6 +278,10 @@ if [ -n "$cfg_url$cfg_key$cfg_model" ]; then
 		# as pi is concerned, so read drops the image from the request and the
 		# answer says the model cannot see pictures — even for a model that can.
 		pdir=${TMPDIR:-/tmp}/terat.$agent.$$
+		# The generated file holds the key, so it must not be readable by
+		# everyone. `>` takes the umask, which is normally 022 — the settings
+		# file is 600, and a temp file with the same secret should match it.
+		umask 077
 		mkdir -p "$pdir" 2>/dev/null
 		printf '{"providers":{"terat":{"baseUrl":"%s","api":"openai-completions","apiKey":"%s","models":[{"id":"%s","input":["text","image"]}]}}}\n' \
 			"${cfg_url:-http://127.0.0.1:1/v1}" "${cfg_key:-none}" "${cfg_model:-none}" \
@@ -290,6 +294,7 @@ if [ -n "$cfg_url$cfg_key$cfg_model" ]; then
 		terat_generated=$pdir ;;
 	opencode)
 		odir=${TMPDIR:-/tmp}/terat.$agent.$$
+		umask 077
 		mkdir -p "$odir" 2>/dev/null
 		# Same lesson as pi, different spelling: without `modalities` opencode
 		# treats the model as text-only and refuses to attach the file.
