@@ -274,9 +274,12 @@ if [ -n "$cfg_url$cfg_key$cfg_model" ]; then
 		# pi reads providers from models.json inside an agent dir it lets you
 		# move, so the settings become that file. Nothing is written into a
 		# real ~/.pi: a working hand-written setup is left exactly as it was.
+		# `input` is not cosmetic. A model entry without it is text-only as far
+		# as pi is concerned, so read drops the image from the request and the
+		# answer says the model cannot see pictures — even for a model that can.
 		pdir=${TMPDIR:-/tmp}/terat.$agent.$$
 		mkdir -p "$pdir" 2>/dev/null
-		printf '{"providers":{"terat":{"baseUrl":"%s","api":"openai-completions","apiKey":"%s","models":[{"id":"%s"}]}}}\n' \
+		printf '{"providers":{"terat":{"baseUrl":"%s","api":"openai-completions","apiKey":"%s","models":[{"id":"%s","input":["text","image"]}]}}}\n' \
 			"${cfg_url:-http://127.0.0.1:1/v1}" "${cfg_key:-none}" "${cfg_model:-none}" \
 			>"$pdir/models.json" 2>/dev/null
 		printf '{"defaultProvider":"terat","defaultModel":"%s"}\n' "${cfg_model:-none}" \
@@ -288,7 +291,9 @@ if [ -n "$cfg_url$cfg_key$cfg_model" ]; then
 	opencode)
 		odir=${TMPDIR:-/tmp}/terat.$agent.$$
 		mkdir -p "$odir" 2>/dev/null
-		printf '{"$schema":"https://opencode.ai/config.json","provider":{"terat":{"npm":"@ai-sdk/openai-compatible","name":"terat","options":{"baseURL":"%s","apiKey":"%s"},"models":{"%s":{"name":"%s"}}}},"model":"terat/%s"}\n' \
+		# Same lesson as pi, different spelling: without `modalities` opencode
+		# treats the model as text-only and refuses to attach the file.
+		printf '{"$schema":"https://opencode.ai/config.json","provider":{"terat":{"npm":"@ai-sdk/openai-compatible","name":"terat","options":{"baseURL":"%s","apiKey":"%s"},"models":{"%s":{"name":"%s","modalities":{"input":["text","image"]}}}}},"model":"terat/%s"}\n' \
 			"${cfg_url:-http://127.0.0.1:1/v1}" "${cfg_key:-none}" \
 			"${cfg_model:-none}" "${cfg_model:-none}" "${cfg_model:-none}" \
 			>"$odir/opencode.json" 2>/dev/null

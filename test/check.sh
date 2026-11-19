@@ -367,6 +367,66 @@ esac
 rm -rf "$XDG_CONFIG_HOME"
 unset XDG_CONFIG_HOME
 
+# 6g. pi's generated models.json declares that the model can take images.
+#     Without `input`, pi treats the entry as text-only and drops the image
+#     before the question is asked, so a vision model answers "I cannot see
+#     images" — a config fault that reads like the model's own limitation.
+cat > $D/pi <<'SH'
+#!/bin/sh
+cat >/dev/null
+cp "$PI_CODING_AGENT_DIR/models.json" /tmp/mj.txt 2>/dev/null
+printf '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"X"}]}}\n'
+printf '{"type":"agent_end"}\n'
+SH
+chmod +x $D/pi
+rm -f /tmp/mj.txt
+XDG_CONFIG_HOME=$(mktemp -d)
+export XDG_CONFIG_HOME
+terat set url http://127.0.0.1:9/v1 >/dev/null 2>&1
+terat set model vision-model >/dev/null 2>&1
+terat q </dev/null >/dev/null 2>&1
+grep -q '"input":\["text","image"\]' /tmp/mj.txt 2>/dev/null ||
+	fail "pi models.json does not declare image input: $(head -c 120 /tmp/mj.txt 2>/dev/null)"
+rm -rf "$XDG_CONFIG_HOME"
+unset XDG_CONFIG_HOME
+# put the answering stand-in back for the claims that follow
+cat > $D/pi <<'SH'
+#!/bin/sh
+cat >/dev/null
+printf '{"type":"session","cwd":"/t"}\n'
+printf '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"ANSWER_OK"}]}}\n'
+printf '{"type":"agent_end"}\n'
+SH
+chmod +x $D/pi
+
+# 6h. opencode's generated config declares the same thing, spelled `modalities`.
+#     It drops the attachment without it, and the answer blames the model.
+cat > $D/opencode <<'SH'
+#!/bin/sh
+cat >/dev/null
+cp "$OPENCODE_CONFIG_DIR/opencode.json" /tmp/ocj.txt 2>/dev/null
+printf '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"X"}]}}\n'
+printf '{"type":"agent_end"}\n'
+SH
+chmod +x $D/opencode
+rm -f /tmp/ocj.txt
+XDG_CONFIG_HOME=$(mktemp -d)
+export XDG_CONFIG_HOME
+terat set agent opencode >/dev/null 2>&1
+terat set url http://127.0.0.1:9/v1 >/dev/null 2>&1
+terat q </dev/null >/dev/null 2>&1
+# It must parse at all as well as carry image input: a stray brace is worse than
+# the original bug, because opencode then rejects its entire config.
+python3 -c '
+import json
+d = json.load(open("/tmp/ocj.txt"))
+m = list(d["provider"]["terat"]["models"].values())[0]
+assert m["modalities"]["input"] == ["text", "image"], m
+' || fail "opencode.json is not valid JSON with image modalities: $(head -c 120 /tmp/ocj.txt 2>/dev/null)"
+rm -rf "$XDG_CONFIG_HOME"
+unset XDG_CONFIG_HOME
+terat set agent pi >/dev/null 2>&1
+
 # 7. the transcript actually reaches the question: a question can only be
 #    answered from the shell's own history if the history is sent.
 if command -v tmux >/dev/null 2>&1; then

@@ -240,7 +240,7 @@ worth knowing if you would rather keep your own config and skip `terat set`:
 #     config: { provider: myrouter, model: <model> }
 ```
 
-Four traps that cost an afternoon each:
+Five traps that cost an afternoon each:
 
 - **Do not export `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` while using `pi`.**
   pi sees either and stops reading its own `models.json`, then calls that
@@ -264,6 +264,15 @@ Four traps that cost an afternoon each:
   a *newer* `dsh-base` whose `dsh-sandbox-local` is then missing: dsh dies at
   boot with `plugin(s) failed to load` before it ever reads a key. Install a
   line that agrees with itself, e.g. `@deepseek-ai/dsh@0.2.2-rc.3`.
+- **A model that cannot see pictures is usually a config that never said it
+  could.** Both `pi` and `opencode` decide *before asking* whether to attach an
+  image, from the model entry: `"input":["text","image"]` for pi,
+  `"modalities":{"input":["text","image"]}` for opencode. Omit it and the entry
+  is text-only by default, the file is dropped from the request, and the model
+  answers that it cannot see images — a prompt that reads exactly like the
+  model's own limitation. `terat` therefore writes both fields. Verified with a
+  picture whose text is known: without the field the answer is "I'm unable to
+  view the image", with it the text is read back correctly.
 
 Tested and not usable: `cursor-agent` needs a Cursor account and draws a TUI;
 `gemini` wants a Google key and has no OpenAI-compatible mode; `aider` failed on an unrelated
