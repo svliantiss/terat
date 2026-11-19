@@ -80,6 +80,27 @@ if command -v tmux >/dev/null 2>&1; then
 		tmux capture-pane -pt T 2>/dev/null | grep -q '%' && break
 		i=$((i + 1))
 	done
+	# Ctrl+X t toggles tracing for the session and says which way it went. Sent at
+	# the first prompt, before any answer is being drawn: pressing it right after
+	# an answer raced the redraw, and a key read by the tty inside that window is
+	# simply lost — which looked exactly like a binding that does not work and
+	# passed only when the machine happened to be slow. The key is still sent
+	# through tmux to a real zle, which is what catches a binding that is present
+	# but swallowed by another widget.
+	_terat_trace_key() {
+		want=$1
+		tmux send-keys -t T C-x t
+		i=0
+		while [ $i -lt 10 ]; do
+			sleep 1
+			tmux capture-pane -pt T >/tmp/scrtrace.txt 2>/dev/null
+			grep -q "trace: $want" /tmp/scrtrace.txt && return 0
+			i=$((i + 1))
+		done
+		return 1
+	}
+	_terat_trace_key on || fail "pty: Ctrl+X t did not turn tracing on; screen was [$(grep -v '^[[:space:]]*$' /tmp/scrtrace.txt | tail -4 | tr '\n' '|')]"
+	_terat_trace_key off || fail "pty: Ctrl+X t did not turn tracing off again; screen was [$(grep -v '^[[:space:]]*$' /tmp/scrtrace.txt | tail -4 | tr '\n' '|')]"
 	tmux send-keys -t T '@hello' Enter
 	# Same here: poll for the label instead of assuming a fixed latency.
 	i=0
@@ -593,6 +614,20 @@ got=$(PATH=/tmp/fakeagent:$PATH TERAT_TRACE_ID= terat --trace q </dev/null 2>&1)
 case $got in
 *EXT=1*) ;;
 *) fail "--trace did not load the extension: [$got]" ;;
+esac
+# The session toggle set by ask mode's Ctrl+X t has to beat the saved default,
+# or pressing it does nothing in the shell it was pressed in.
+terat set trace off >/dev/null 2>&1
+got=$(PATH=/tmp/fakeagent:$PATH TERAT_TRACE=1 TERAT_TRACE_ID= terat q </dev/null 2>&1)
+case $got in
+*EXT=1*) ;;
+*) fail "TERAT_TRACE=1 did not override set trace off: [$got]" ;;
+esac
+terat set trace on >/dev/null 2>&1
+got=$(PATH=/tmp/fakeagent:$PATH TERAT_TRACE=0 TERAT_TRACE_ID= terat q </dev/null 2>&1)
+case $got in
+*EXT=0*) ;;
+*) fail "TERAT_TRACE=0 did not override set trace on: [$got]" ;;
 esac
 # A bad value must be refused rather than stored and read as neither.
 if terat set trace yes >/tmp/trbad.txt 2>&1; then fail "set trace accepted an invalid value"; fi

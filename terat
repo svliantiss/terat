@@ -424,9 +424,17 @@ esac
 # different endpoint should not inherit the span collector of the one before it.
 # `terat set trace on|off` stores it; the variable wins when both are present.
 if [ -z "$trace_want" ]; then
-	case $(cfg_get trace) in
-	on) trace_want=1 ;;
-	off) trace_want=off ;;
+	# The environment comes first: ask mode's Ctrl+X t sets TERAT_TRACE for the
+	# session, and a session toggle has to beat the saved default or it does
+	# nothing in the shell where it was pressed.
+	case ${TERAT_TRACE:-} in
+	1) trace_want=1 ;;
+	0 | off) trace_want=off ;;
+	*)
+		case $(cfg_get trace) in
+		on) trace_want=1 ;;
+		off) trace_want=off ;;
+		esac ;;
 	esac
 fi
 # `--` ends the options, so everything after it is the question. Needed because

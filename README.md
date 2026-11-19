@@ -753,13 +753,17 @@ question is unaffected.
 | `TERAT_OTLP` | unset | OTLP/HTTP JSON endpoint; unset means no tracing |
 | `TERAT_OTLP_KEY` | unset | bearer token sent as `Authorization` |
 | `TERAT_OTLP_DEBUG` | unset | `1` logs each post to `$TMPDIR/terat.otlp.log`; a path logs there |
+| `TERAT_TRACE` | unset | `1` traces (ask mode's `Ctrl+X t` sets it); `0` turns tracing off for this shell |
 | `TERAT_TRACE_ID` | minted by `--trace` | 32-hex trace id to propagate as `traceparent` |
 | `TERAT_TRACE_PROVIDER` | `terat` for a generated config, else `router` | provider name that carries the `traceparent` header |
 
 ## Tracing
 
-`terat --trace '…'` traces one question, and `terat set trace on` traces every
-one. The flag exists because the interesting runs are the irregular ones — the
+Three ways in, because the three moments differ: `terat --trace '…'` for one
+question, `Ctrl+X t` in ask mode for the session you are already in, and
+`terat set trace on` for everything from now on. The session toggle beats the
+saved default — a key that loses to a file is not a toggle. The flag exists
+because the interesting runs are the irregular ones — the
 build that failed once, the answer worth keeping — and exporting a variable for
 those is how they end up untraced. `set trace off` stops it even with a collector
 configured; a setting the run ignores is worse than no setting.

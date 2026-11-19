@@ -256,6 +256,20 @@ _terat_key() {
 	_terat_apply
 	zle reset-prompt
 }
+
+# Tracing toggled per session, because a session is the unit the transcript
+# already uses: a shell that keeps one thread of questions and commands is the
+# thing worth having as one trace. Answering a single question without leaving
+# ask mode is the common case, and exporting a variable to get it loses the
+# mode you were in.
+_terat_trace() {
+	case ${TERAT_TRACE:-} in
+	1) TERAT_TRACE=; print -r -- 'trace: off' ;;
+	*) TERAT_TRACE=1; print -r -- 'trace: on' ;;
+	esac
+	export TERAT_TRACE
+	zle reset-prompt
+}
 zle -N _terat_key
 
 # Shift+Enter starts a new line, so a question can span several lines. Two
@@ -270,6 +284,8 @@ bindkey '\e[27;2;13~' _terat_newline # xterm modifyOtherKeys: shift+enter
 bindkey '\e\r' _terat_newline        # option/alt+enter
 bindkey '^Xi' _terat_key             # Ctrl+X i
 bindkey '^[i' _terat_key             # Option+i, if the terminal sends meta
+zle -N _terat_trace
+bindkey '^Xt' _terat_trace            # Ctrl+X t: trace this session
 
 # Put the prompt and a line of text where the prompt currently is. zle has
 # just cleared the typed text and opened a new line, so step back onto it.
