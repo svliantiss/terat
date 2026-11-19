@@ -287,14 +287,29 @@ Five traps that cost an afternoon each:
   boot with `plugin(s) failed to load` before it ever reads a key. Install a
   line that agrees with itself, e.g. `@deepseek-ai/dsh@0.2.2-rc.3`.
 - **A model that cannot see pictures is usually a config that never said it
-  could.** Both `pi` and `opencode` decide *before asking* whether to attach an
-  image, from the model entry: `"input":["text","image"]` for pi,
+  could.** Three of the six decide *before asking* whether to attach an image,
+  from the model entry: `"input":["text","image"]` for pi and dsh,
   `"modalities":{"input":["text","image"]}` for opencode. Omit it and the entry
   is text-only by default, the file is dropped from the request, and the model
   answers that it cannot see images — a prompt that reads exactly like the
-  model's own limitation. `terat` therefore writes both fields. Verified with a
-  picture whose text is known: without the field the answer is "I'm unable to
-  view the image", with it the text is read back correctly.
+  model's own limitation. `terat` writes all three. Verified with a picture
+  whose text is known: without the field the answer is "I'm unable to view the
+  image", with it the text is read back exactly.
+
+  The other three need no such field and still differ, which `terat attach`
+  prints rather than leaves to be discovered one screenshot at a time:
+
+  | agent | how an image reaches the model |
+  | --- | --- |
+  | `pi`, `opencode`, `dsh` | its own `read` attaches it, gated on the model's `input` |
+  | `claude`, `codex` | passed through directly, no capability field |
+  | `grok` | its `view_file` renders images |
+
+  All six read a known code out of a PNG when asked normally. `grok` is the one
+  that will also hand back raw IDAT bytes if you explicitly tell it to use
+  `view_file` on the path — the same question, asked as a command rather than a
+  question, gets a worse answer.
+
 
 Tested and not usable: `cursor-agent` needs a Cursor account and draws a TUI;
 `gemini` wants a Google key and has no OpenAI-compatible mode; `aider` failed on an unrelated

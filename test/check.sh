@@ -364,6 +364,23 @@ esac
 case $got in
 *sk-dsh*) fail "the key was written into dsh's config instead of named" ;;
 esac
+# The model entry must also claim image input. dsh bundles the same library as pi
+# and drops an attached image for a model that does not declare one, so the
+# answer blames the model for a property of the config.
+cat >/tmp/dshimgprobe <<'SH'
+#!/bin/sh
+cat >/dev/null
+grep -A3 'name: m1' "$DSH_HOME/profiles/headless/cordis.patch.yml" 2>/dev/null
+SH
+chmod +x /tmp/dshimgprobe
+export XDG_CONFIG_HOME=/tmp/teratdsh
+rm -rf "$XDG_CONFIG_HOME"
+(terat set url http://127.0.0.1:1/v1 && terat set model m1) >/dev/null 2>&1
+got=$(cd /tmp && TERAT_CMD=/tmp/dshimgprobe ~/Projects/terat/terat dsh q </dev/null 2>&1)
+case $got in
+*'input: ["text", "image"]'*) ;;
+*) fail "dsh model entry does not declare image input: [$got]" ;;
+esac
 rm -rf "$XDG_CONFIG_HOME"
 unset XDG_CONFIG_HOME
 

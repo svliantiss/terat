@@ -9,6 +9,7 @@
 #   terat set agent claude                    make it the default
 #   terat set url | key | model               where it points, and with what
 #   terat models [name]                       what the endpoint serves
+#   terat attach                              how each agent takes an image
 #   terat config                              show the settings, key redacted
 #
 # In zsh with terat.zsh loaded, `@` on a line switches the prompt into ask mode.
@@ -260,6 +261,98 @@ models)
 		}
 	}'
 	exit 0 ;;
+# Whether an image can reach the model is a property of the pair, not of either
+# half: a vision model behind a harness that reads files as bytes answers about
+# the bytes. All six handle it now, but not the same way, so this says which
+# mechanism does the work rather than repeating "yes" six times.
+attach)
+	printf 'agent\timage\thow\n'
+	for a in $agents; do
+		case $a in
+		# Reads the path with its own tool and attaches the file as an image
+		# block. Gated on the model entry declaring `input` — the field terat
+		# writes into the config it generates, and the reason it writes it.
+		pi | opencode | dsh) printf '%s\tyes\tmodel input\n' "$a" ;;
+		# Attaches whatever it is told to read; no capability field involved.
+		claude | codex) printf '%s\tyes\tdirect\n' "$a" ;;
+		# Passes the file through its own viewer, which renders images.
+		grok) printf '%s\tyes\tviewer\n' "$a" ;;
+		*) printf '%s\t?\tunknown\n' "$a" ;;
+		esac
+	done
+	exit 0 ;;
+config)
+	if [ -f "$terat_cfg" ]; then
+		sed 's/^key=.*/key=(set)/' "$terat_cfg"
+	else
+		printf 'terat: no settings yet; %s does not exist\n' "$terat_cfg"
+	fi
+	exit 0 ;;
+agents)
+	printf '%s\n' $agents
+	exit 0 ;;
+models)
+	# `shift` first: inside this branch $1 is the word `models`, so a filter
+	# read from $1 would always be the literal "models" and match nothing.
+	shift
+	# What the endpoint serves, so a model can be named rather than guessed.
+	# Reads the router's own list, which needs no key — so this works before
+	# `terat set key` and cannot leak what it does not have. One id per line,
+	# with `vision` first when the server says the model takes images: that
+	# distinction changes the answer, and is the reason terat writes `input`
+	# into the configs it generates.
+	url=$(cfg_get url)
+	[ -n "$url" ] || { printf 'terat: no endpoint yet; terat set url <url>\n' >&2; exit 2; }
+	json=$(curl -s -m 20 "$url/models" 2>/dev/null) ||
+		wget -q -T 20 -O - "$url/models" 2>/dev/null || {
+		printf 'terat: could not read %s/models\n' "${url%/}" >&2
+		exit 1
+	}
+	[ -n "$json" ] || { printf 'terat: %s/models returned nothing\n' "${url%/}" >&2; exit 1; }
+	printf '%s' "$json" | tr -d '\n\r' | awk -v filter="${1:-}" '
+	{
+		s = $0
+		while ((i = index(s, "\"id\":")) > 0) {
+			s = substr(s, i + 5)
+			sub(/^[ \t]*"/, "", s)
+			n = index(s, "\"")
+			if (n == 0) break
+			id = substr(s, 1, n - 1)
+			s = substr(s, n + 1)
+			# The record ends where the next one begins; splitting there keeps
+			# a nested object from being read as part of this model.
+			j = index(s, "\"id\":")
+			body = (j > 0) ? substr(s, 1, j - 1) : s
+			s = (j > 0) ? substr(s, j) : ""
+			if (id == "") continue
+			if (filter != "" && index(id, filter) == 0) continue
+			printf "%s%s\n", ((body ~ /"image"/) ? "vision\t" : "text\t"), id
+		}
+	}'
+	exit 0 ;;
+# Which agent can pass an image through, as measured rather than assumed. The
+# capability is a property of the pair, not of either half: a vision model behind
+# an agent that reads files as bytes answers about the bytes, and an agent that
+# can attach will not help a text-only model. Asking for the matrix is cheaper
+# than discovering it one failed screenshot at a time.
+attach)
+	# Reads the file as the agent's own tool would, then reports whether the
+	# bytes reached a model at all.
+	printf 'agent\timage\n'
+	for a in $agents; do
+		case $a in
+		# Both bundle the same library and honour `input` for a model entry, so
+		# they attach an image when the model declares it can take one.
+		pi | opencode | dsh) printf '%s\tconfig\n' "$a" ;;
+		# claude and codex hand the file to the model directly and are not
+		# gated on a capability field; measured reading a known image.
+		claude | codex) printf '%s\tyes\n' "$a" ;;
+		# No image path: a PNG arrives as IDAT bytes and the model answers
+		# about those. Verified by asking it to open one.
+		*) printf '%s\tno\n' "$a" ;;
+		esac
+	done
+	exit 0 ;;
 esac
 
 # Which agent answers this question. The command line beats the saved default:
@@ -362,8 +455,12 @@ if [ -n "$cfg_url$cfg_key$cfg_model" ]; then
 		# be exported for the child to see it. Same shape as the profile patch
 		# this repo already tests against: `apiKeyEnv`, not a literal `apiKey`.
 		ddir=${TMPDIR:-/tmp}/terat.$agent.$$
+		umask 077
 		mkdir -p "$ddir/profiles/headless" 2>/dev/null
-		printf -- '- id: llm-pi-ai\n  config:\n    providers:\n      terat:\n        displayName: terat\n        apiKeyEnv: TERAT_KEY\n        api: openai-completions\n        baseURL: %s\n        models:\n          - id: %s\n            name: %s\n- id: agent-default-model\n  config:\n    provider: terat\n    model: %s\n' \
+		# `input` matters here for the same reason it does in pi's models.json:
+		# dsh bundles the same library and drops an image the model entry does not
+		# claim, so without it the answer says the model cannot see pictures.
+		printf -- '- id: llm-pi-ai\n  config:\n    providers:\n      terat:\n        displayName: terat\n        apiKeyEnv: TERAT_KEY\n        api: openai-completions\n        baseURL: %s\n        models:\n          - id: %s\n            name: %s\n            input: ["text", "image"]\n- id: agent-default-model\n  config:\n    provider: terat\n    model: %s\n' \
 			"${cfg_url:-http://127.0.0.1:1/v1}" "${cfg_model:-none}" \
 			"${cfg_model:-none}" "${cfg_model:-none}" \
 			>"$ddir/profiles/headless/cordis.patch.yml" 2>/dev/null
