@@ -10,6 +10,7 @@
 #   terat set url | key | model               where it points, and with what
 #   terat models [name]                       what the endpoint serves
 #   terat attach                              how each agent takes an image
+#   terat --trace '…'                         send this question as one trace
 #   terat config                              show the settings, key redacted
 #
 # In zsh with terat.zsh loaded, `@` on a line switches the prompt into ask mode.
@@ -91,6 +92,33 @@ mkdir -p "${thread%/*}" 2>/dev/null
 #   dsh       DSH_HOME -> profiles/headless/cordis.patch.yml
 terat_cfg=${TERAT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/terat/settings}
 agents='pi claude codex opencode grok dsh'
+
+# The collector settings live in a .env beside this file, and read here as well
+# as in terat.zsh. The zsh hook is what a laptop has; a container or a bare VPS
+# has only this script, and tracing that silently does not happen there is worse
+# than no tracing at all. Parsed, never sourced: a stray line must not be able to
+# run a command, and only the two keys that belong to the collector are taken.
+terat_self=$0
+case $terat_self in
+*/*) terat_dir=${terat_self%/*} ;;
+*) terat_dir=. ;;
+esac
+if [ -r "$terat_dir/.env" ] && [ -z "${TERAT_OTLP:-}" ]; then
+	while IFS='=' read -r env_k env_v; do
+		case $env_k in
+		TERAT_OTLP | TERAT_OTLP_KEY) ;;
+		*) continue ;;
+		esac
+		# A hand-quoted or CRLF-edited value still has to be usable.
+		env_v=${env_v%\"}
+		env_v=${env_v#\"}
+		env_v=${env_v%\'}
+		env_v=${env_v#\'}
+		[ -n "$env_v" ] || continue
+		export "$env_k=$env_v"
+	done <"$terat_dir/.env"
+	unset env_k env_v
+fi
 
 # One row per agent: how to ask it a question on stdin, and what to call it over
 # the answer. `{}` marks where the question goes for the two that refuse stdin.
@@ -184,7 +212,7 @@ set)
 			printf 'agent=%s (but `%s` is not on PATH yet)\n' "$val" "$bin"
 		fi
 		exit 0 ;;
-	url | key | model)
+	url | key | model | trace)
 		if [ -z "$val" ]; then
 			# A key is never printed: it is read by an agent, not by a person,
 			# and a terminal keeps what it shows in scrollback.
@@ -193,9 +221,26 @@ set)
 				if [ -n "$(cfg_get key)" ]; then printf 'key=(set)\n'
 				else printf 'key=(unset)\n'
 				fi ;;
+			trace)
+				# An unset trace reads as off, because that is what it does.
+				printf 'trace=%s\n' "$(cfg_get trace | sed 's/^$//')" |
+					sed 's/^trace=$/trace=off/'
+				;;
 			*) printf '%s=%s\n' "$key" "$(cfg_get "$key")" ;;
 			esac
 			exit 0
+		fi
+		# A word that is not on or off would otherwise be stored and read as
+		# neither, which turns tracing off silently — the opposite of what
+		# someone typing `set trace yes` meant.
+		if [ "$key" = trace ]; then
+			case $val in
+			on | off) ;;
+			'') cur=$(cfg_get trace); printf '%s\n' "${cur:-off}"; exit 0 ;;
+			*)
+				printf 'terat: trace takes on or off, not: %s\n' "$val" >&2
+				exit 2 ;;
+			esac
 		fi
 		cfg_set "$key" "$val" || exit 1
 		case $key in key) printf 'key=(set)\n' ;; *) printf '%s=%s\n' "$key" "$val" ;; esac
@@ -206,10 +251,11 @@ set)
 		printf 'terat: set url <base url>\n' >&2
 		printf 'terat: set key <api key>\n' >&2
 		printf 'terat: set model <model id>   (terat models shows them)\n' >&2
+		printf 'terat: set trace on | off      trace every question\n' >&2
 		exit 2 ;;
 	*)
 		printf 'terat: cannot set: %s\n' "$key" >&2
-		printf 'terat: try agent, url, key or model; terat models lists them\n' >&2
+		printf 'terat: try agent, url, key, model or trace\n' >&2
 		exit 2 ;;
 	esac ;;
 config)
@@ -360,6 +406,29 @@ esac
 # how you ask one question of something else.
 agent=$(cfg_get agent)
 agent=${agent:-pi}
+# `--trace` asks for a trace on this one question. It is a flag rather than a
+# variable because the useful moments are the irregular ones — a build that
+# failed once, a question worth keeping — and exporting a variable for those is
+# how the interesting runs end up untraced.
+# Three states, not a boolean: empty means "no opinion" (trace when a collector
+# is configured, which is how it worked before), `1` means --trace or `set trace
+# on`, and `off` means do not trace even though a collector exists. A boolean
+# could not tell an explicit off from silence, and off was being ignored.
+trace_want=''
+case ${1:-} in
+--trace)
+	trace_want=1
+	shift ;;
+esac
+# A trace that is on by default has to be per provider: pointing terat at a
+# different endpoint should not inherit the span collector of the one before it.
+# `terat set trace on|off` stores it; the variable wins when both are present.
+if [ -z "$trace_want" ]; then
+	case $(cfg_get trace) in
+	on) trace_want=1 ;;
+	off) trace_want=off ;;
+	esac
+fi
 # `--` ends the options, so everything after it is the question. Needed because
 # ask mode sends the question as argv words: without this, asking "claude wrote
 # this" would select the claude agent and lose the word.
@@ -553,7 +622,14 @@ fi
 # nothing and reads as a random string, so hold the value to 32 lowercase hex
 # digits and drop the propagation entirely when it is not — asking for a trace
 # with a bad id is a mistake worth ignoring, not a reason to fail the question.
-trace_id=${TERAT_TRACE_ID:-}
+# --trace and a collector configured means one id for the whole run: without
+# one here, the spans mint their own later and the router never hears about it,
+# which is why a trace could exist and still be impossible to join to the
+# request that caused it.
+if [ "$trace_want" = 1 ] && [ -z "$trace_id" ]; then
+	trace_id=$(od -An -tx1 -N16 /dev/urandom 2>/dev/null | tr -d ' \n')
+fi
+trace_id=${trace_id:-${TERAT_TRACE_ID:-}}
 # The directory holding a path, or the cwd for a bare name on PATH. Parameter
 # expansion, not dirname(1): another binary to be missing, and on a stripped
 # PATH it printed "dirname: not found" after the answer, reading as a failure.
@@ -578,6 +654,13 @@ if [ -n "$trace_id" ] && [ -z "${TERAT_CMD:-}" ]; then
 	if [ -f "$trace_ext" ]; then
 		TERAT_TRACE_ID=$trace_id TERAT_TRACE_SPAN=$trace_span \
 			export TERAT_TRACE_ID TERAT_TRACE_SPAN
+		# The extension registers the header against a provider *name*, and a
+		# name that does not match the one in models.json is not an error: the
+		# header simply never goes out, so the trace posts and the router never
+		# hears of it. terat's own generated config calls its provider `terat`;
+		# only a hand-written router setup uses the other name.
+		[ -z "${TERAT_TRACE_PROVIDER:-}" ] && [ -n "$pdir" ] &&
+			{ TERAT_TRACE_PROVIDER=terat; export TERAT_TRACE_PROVIDER; }
 		pi_cmd="$pi_cmd -e $trace_ext"
 	fi
 fi
@@ -1003,6 +1086,10 @@ answer() {
 # having, and for a while those were the only questions that left no trace at
 # all.
 trace_ask() {
+	# `set trace off` turns the trace off even when a collector is configured:
+	# the setting exists to be obeyed, and a run that posts anyway makes the
+	# switch decorative.
+	[ "$trace_want" = off ] && return 0
 	if [ -z "${TERAT_OTLP:-}" ] || [ ! -s "$tmp" ]; then
 		return 0
 	fi

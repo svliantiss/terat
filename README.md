@@ -753,10 +753,21 @@ question is unaffected.
 | `TERAT_OTLP` | unset | OTLP/HTTP JSON endpoint; unset means no tracing |
 | `TERAT_OTLP_KEY` | unset | bearer token sent as `Authorization` |
 | `TERAT_OTLP_DEBUG` | unset | `1` logs each post to `$TMPDIR/terat.otlp.log`; a path logs there |
-| `TERAT_TRACE_ID` | unset | 32-hex trace id to propagate as `traceparent` |
-| `TERAT_TRACE_PROVIDER` | `router` | provider that carries the `traceparent` header |
+| `TERAT_TRACE_ID` | minted by `--trace` | 32-hex trace id to propagate as `traceparent` |
+| `TERAT_TRACE_PROVIDER` | `terat` for a generated config, else `router` | provider name that carries the `traceparent` header |
 
 ## Tracing
+
+`terat --trace '…'` traces one question, and `terat set trace on` traces every
+one. The flag exists because the interesting runs are the irregular ones — the
+build that failed once, the answer worth keeping — and exporting a variable for
+those is how they end up untraced. `set trace off` stops it even with a collector
+configured; a setting the run ignores is worse than no setting.
+
+One question is one trace, and one id is shared by the model request and the
+span post, so the request that caused the work can be found from either side.
+That only holds because `--trace` mints the id *before* propagation: minted
+later, the spans get an id of their own and the two records never meet.
 
 Set `TERAT_OTLP` and each question is sent as one OpenTelemetry trace. It is off
 until you do, and there is nothing to run alongside it — no collector, no agent,
@@ -767,12 +778,13 @@ export TERAT_OTLP=https://api.lmnr.ai:443/v1/traces     # Laminar, OTLP/HTTP/jso
 export TERAT_OTLP_KEY=pk_...                            # project API key
 ```
 
-Both can live in a `.env` next to `terat.zsh` instead of in `~/.zshrc`.
-`terat.zsh` reads that file on load, taking only `TERAT_OTLP` and
-`TERAT_OTLP_KEY` and ignoring everything else in it. It is parsed rather than
-sourced: a file kept for one secret should not be able to run commands in every
-shell. A value already set in the environment wins, so a one-off
-`TERAT_OTLP=... terat` still overrides the file. Keep `.env` out of git — the repo
+Both can live in a `.env` next to the script instead of in `~/.zshrc`, and
+`terat` reads it itself — not only `terat.zsh`. A container or a bare VPS has no
+shell hook at all, and tracing that silently does not happen there is worse than
+none. The file is parsed rather than sourced: a file kept for one secret should
+not be able to run commands. Only `TERAT_OTLP` and `TERAT_OTLP_KEY` are taken. A
+value already set in the environment wins, so a one-off `TERAT_OTLP=... terat`
+still overrides the file. Keep `.env` out of git — the repo
 gitignores it.
 
 Self-hosted Laminar here is `https://otlp.example.com/v1/traces`, and its UI lives

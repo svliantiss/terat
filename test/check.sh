@@ -537,6 +537,69 @@ text	bare/model'
 fi
 
 
+# 6k. `--trace` propagates one id to the model request and the span post, and
+#     `set trace on|off` decides whether that happens without the flag.
+#     The provider name is the part worth pinning: the extension registers the
+#     traceparent against a provider *name*, and a name that does not match
+#     models.json is not an error — the header silently never goes out, so the
+#     trace posts and the request it came from cannot be found again.
+#     Tested through a stand-in pi rather than $TERAT_CMD, because a custom
+#     command deliberately bypasses propagation: it is not terat's agent, so
+#     there is nothing to load the extension into.
+cat >/tmp/fakepi <<'SH'
+#!/bin/sh
+cat >/dev/null
+printf 'EXT=%s\n' "$(printf '%s' "$*" | grep -c 'terat-trace.js')"
+printf 'TRACEID=%s\n' "${TERAT_TRACE_ID:-unset}"
+printf 'PROV=%s\n' "${TERAT_TRACE_PROVIDER:-unset}"
+printf '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"X"}]}}\n'
+printf '{"type":"agent_end"}\n'
+SH
+chmod +x /tmp/fakepi
+# A directory holding only this stand-in, so `command -v pi` finds it and no
+# real agent is involved in the claim.
+rm -rf /tmp/fakeagent && mkdir -p /tmp/fakeagent
+cp /tmp/fakepi /tmp/fakeagent/pi
+XDG_CONFIG_HOME=$(mktemp -d)
+export XDG_CONFIG_HOME
+terat set url http://127.0.0.1:9/v1 >/dev/null 2>&1
+terat set model m1 >/dev/null 2>&1
+# off: no id, no extension, so nothing can be propagated.
+terat set trace off >/dev/null 2>&1
+got=$(PATH=/tmp/fakeagent:$PATH TERAT_TRACE_ID= terat q </dev/null 2>&1)
+case $got in
+*EXT=0*) ;;
+*) fail "extension was loaded with tracing off: [$got]" ;;
+esac
+# on: an id is minted, the extension loads, and it is told the provider name
+# terat actually writes into the config it generated.
+terat set trace on >/dev/null 2>&1
+got=$(PATH=/tmp/fakeagent:$PATH TERAT_TRACE_ID= terat q </dev/null 2>&1)
+case $got in
+*EXT=1*) ;;
+*) fail "set trace on did not load the extension: [$got]" ;;
+esac
+case $got in
+*TRACEID=unset*) fail "set trace on minted no id: [$got]" ;;
+esac
+case $got in
+*PROV=terat*) ;;
+*) fail "trace extension was not told the generated provider name: [$got]" ;;
+esac
+# The flag alone works with tracing off, because asking for one question is
+# exactly what it is for.
+terat set trace off >/dev/null 2>&1
+got=$(PATH=/tmp/fakeagent:$PATH TERAT_TRACE_ID= terat --trace q </dev/null 2>&1)
+case $got in
+*EXT=1*) ;;
+*) fail "--trace did not load the extension: [$got]" ;;
+esac
+# A bad value must be refused rather than stored and read as neither.
+if terat set trace yes >/tmp/trbad.txt 2>&1; then fail "set trace accepted an invalid value"; fi
+grep -q 'on or off' /tmp/trbad.txt || fail "set trace did not explain the refusal: [$(cat /tmp/trbad.txt)]"
+rm -rf "$XDG_CONFIG_HOME" /tmp/fakeagent
+unset XDG_CONFIG_HOME
+
 # 7. the transcript actually reaches the question: a question can only be
 #    answered from the shell's own history if the history is sent.
 if command -v tmux >/dev/null 2>&1; then
