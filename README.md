@@ -969,10 +969,11 @@ agent actually reads it:
 | `dsh` | `headers:` in the generated `profiles/headless/cordis.patch.yml` |
 | `grok` | nothing — see below |
 
-The id is minted *before* any config is generated, because four of the six carry
-it inside that config. Minting it later left the generated files with no id in
-them and the propagation silently absent: the trace posted, the span looked right,
-and the router had never heard of it.
+The id is minted *before* the per-agent settings are applied, because four of the
+five that can join read it there — two write it into a generated file, two export
+it. Minting it later left the generated files with no id in them and the
+propagation silently absent: the trace posted, the span looked right, and the
+router had never heard of it.
 
 `grok` is the one agent that cannot join. It has no header option, no field in
 `config.toml`, no environment hook it documents, and nothing in its bundle reads
@@ -1001,7 +1002,7 @@ header "traceparent" from environment variables: TERAT_TRACE_ID
 Loading it per run means there is no state to forget. `models.json` is never
 edited and `pi` on its own stays exactly as it was. Confirmed both ways: with the
 variables set the id reaches the router, and with them absent `pi` runs normally
-and sends no `traceparent` at all. The four that write a config get theirs in a
+and sends no `traceparent` at all. The two that write a config get theirs in a
 directory that exists only for that run, so nothing there is remembered either.
 
 This is optional in the same sense as `TERAT_OTLP`: nothing is propagated unless
