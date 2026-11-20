@@ -644,6 +644,94 @@ case $got in
 *EXT=0*) ;;
 *) fail "TERAT_TRACE=0 did not override set trace on: [$got]" ;;
 esac
+# Every agent that can carry a traceparent must actually be given one, and each
+# carries it in its own place. Appending `-e` (pi's extension loader) to every
+# agent was what shipped first: claude answered "unknown option '-e'" and opencode
+# misread the flag, so asking for a trace broke two of the six outright.
+# The stub reports where the value ended up, so this fails if a mechanism dies.
+cat >/tmp/whichhdr <<'SH'
+#!/bin/sh
+cat >/dev/null
+ids=''
+[ -n "${ANTHROPIC_CUSTOM_HEADERS:-}" ] && ids="$ids claude:$ANTHROPIC_CUSTOM_HEADERS"
+[ -n "${TERAT_TRACEPARENT:-}" ] && ids="$ids codex-env:$TERAT_TRACEPARENT"
+case $* in
+*-c*env_http_headers.traceparent*) ids="$ids codex-arg" ;;
+esac
+for d in "${OPENCODE_CONFIG_DIR:-}" "${DSH_HOME:-}"; do
+	[ -n "$d" ] || continue
+	for f in "$d/opencode.json" "$d/profiles/headless/cordis.patch.yml"; do
+		[ -f "$f" ] && ids="$ids $(grep -o 'traceparent[^,}]*' "$f" 2>/dev/null)"
+	done
+done
+printf 'HDR=%s\n' "$ids"
+printf 'ARGV=%s\n' "$*"
+printf '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"X"}]}}\n'
+printf '{"type":"agent_end"}\n'
+SH
+chmod +x /tmp/whichhdr
+for who in claude codex opencode dsh; do
+	case $who in
+	claude) hdr_where='claude:traceparent' ;;   # env header list
+	codex) hdr_where='codex-env' ;;             # header from an env var
+	opencode) hdr_where='traceparent":"' ;;     # options.headers in its config
+	dsh) hdr_where='traceparent: ' ;;           # headers: in the provider patch
+	esac
+	rm -rf /tmp/oneagent && mkdir -p /tmp/oneagent
+	cp /tmp/whichhdr "/tmp/oneagent/$who"
+	XDG_CONFIG_HOME=$(mktemp -d)
+	export XDG_CONFIG_HOME
+	(terat set url http://127.0.0.1:9/v1 && terat set model m1) >/dev/null 2>&1
+	got=$(PATH=/tmp/oneagent:$PATH TERAT_TRACE_ID= terat --trace "$who" q </dev/null 2>&1)
+	rm -rf "$XDG_CONFIG_HOME"
+	XDG_CONFIG_HOME=/tmp/terat-claim-nohome
+	# None of the other five may be handed pi's extension flag. Read the argv
+	# line alone: the question terat builds also lists the working directory, and
+	# that listing contains terat-trace.js, so searching the whole output made
+	# this fire on a correct run.
+	argv_line=$(printf '%s\n' "$got" | grep '^ARGV=' | head -1)
+	case $argv_line in
+	*terat-trace.js*) fail "$who was handed pi's -e extension: [$argv_line]" ;;
+	esac
+# The value has to arrive where that agent actually reads it, in the shape the
+# router parses, and each agent must get its own mechanism rather than another's.
+	case $(printf '%s\n' "$got" | grep '^HDR=' | head -1) in
+	*"$hdr_where"*00-[0-9a-f][0-9a-f]*) ;;
+	*) fail "$who carried no $hdr_where: $(printf '%s\n' "$got" | grep '^HDR=' | head -1)" ;;
+	esac
+done
+# `trace off` must silence both halves. Gating only the span left the header going
+# out, so the router's ledger recorded a trace id while no span was ever posted:
+# the split that one id exists to prevent.
+cat >/tmp/whichoff <<'SH'
+#!/bin/sh
+cat >/dev/null
+printf 'HDR=%s\n' "${TERAT_TRACEPARENT:-}${ANTHROPIC_CUSTOM_HEADERS:-}"
+printf '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"X"}]}}\n'
+printf '{"type":"agent_end"}\n'
+SH
+chmod +x /tmp/whichoff
+rm -rf /tmp/offagent && mkdir -p /tmp/offagent
+cp /tmp/whichoff /tmp/offagent/codex
+XDG_CONFIG_HOME=$(mktemp -d)
+export XDG_CONFIG_HOME
+(terat set url http://127.0.0.1:9/v1 && terat set model m1 && terat set trace off) >/dev/null 2>&1
+# codex is the witness because it reads the header from an env var, which a stub
+# can observe; dsh reads it from a generated YAML and cannot answer this question.
+# An exported id is a real setup, and it must not smuggle a header past `off`.
+# Assert on the id, not on the word: the stub prints the value, so grepping for
+# "traceparent" matched nothing and the guard passed over a leaking header.
+offhdr=$(PATH=/tmp/offagent:$PATH TERAT_TRACE_ID=deadbeefdeadbeefdeadbeefdeadbeef \
+	terat codex q </dev/null 2>&1 | grep '^HDR=' | grep -c 'deadbeef')
+[ "$offhdr" = 0 ] || fail "trace off propagated a header anyway"
+# And --trace must beat `off`, or the flag is the thing that does not work.
+onhdr=$(PATH=/tmp/offagent:$PATH TERAT_TRACE_ID=deadbeefdeadbeefdeadbeefdeadbeef \
+	terat --trace codex q </dev/null 2>&1 | grep '^HDR=' | grep -c 'deadbeef')
+[ "$onhdr" = 1 ] || fail "--trace did not beat set trace off"
+rm -rf "$XDG_CONFIG_HOME"
+XDG_CONFIG_HOME=/tmp/terat-claim-nohome
+rm -rf /tmp/offagent
+
 # A bad value must be refused rather than stored and read as neither.
 if terat set trace yes >/tmp/trbad.txt 2>&1; then fail "set trace accepted an invalid value"; fi
 grep -q 'on or off' /tmp/trbad.txt || fail "set trace did not explain the refusal: [$(cat /tmp/trbad.txt)]"

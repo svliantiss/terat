@@ -75,14 +75,20 @@ terat claude 'why is the build failing?'   # ask claude for one question
 terat set agent claude                      # ask claude from now on
 ```
 
-| name | asks it with | `@file` | url/key reaches it through |
-|---|---|---|---|
-| `pi` | `pi -p --mode json` (the default) | yes | `PI_CODING_AGENT_DIR` → `models.json` |
-| `claude` | `claude -p` | yes | `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY` |
-| `codex` | `codex exec --skip-git-repo-check` | yes | `-c key=value` overrides |
-| `opencode` | `opencode run` | yes | `OPENCODE_CONFIG_DIR` → `opencode.json` |
-| `grok` | `grok -p {}` | yes | `GROK_BASE_URL`, `GROK_API_KEY` |
-| `dsh` | `dsh --profile headless {}` | yes | `DSH_HOME` → profile patch |
+| name | asks it with | `@file` | url/key reaches it through | `--trace` reaches it through |
+|---|---|---|---|---|
+| `pi` | `pi -p --mode json` (the default) | yes | `PI_CODING_AGENT_DIR` → `models.json` | `-e terat-trace.js` |
+| `claude` | `claude -p` | yes | `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY` | `ANTHROPIC_CUSTOM_HEADERS` |
+| `codex` | `codex exec --skip-git-repo-check` | yes | `-c key=value` overrides | `-c …env_http_headers.traceparent` |
+| `opencode` | `opencode run` | yes | `OPENCODE_CONFIG_DIR` → `opencode.json` | `options.headers` |
+| `grok` | `grok -p {}` | yes | `GROK_BASE_URL`, `GROK_API_KEY` | — cannot join |
+| `dsh` | `dsh --profile headless {}` | yes | `DSH_HOME` → profile patch | `headers:` in the patch |
+
+The tracing column is a column because it is the same problem once more: five
+agents carry a `traceparent` five different ways, and the sixth has no way at all.
+It is not one mechanism applied six times. `-e` loads a JS module and only `pi` has
+one; handing it to `claude` is `error: unknown option '-e'`. See
+[Joining a trace to the router's ledger](#joining-a-trace-to-the-routers-ledger).
 
 Those last-column differences are the reason a name beats a command string. Each
 agent takes its endpoint somewhere else, and getting that wrong fails quietly: a
@@ -260,9 +266,14 @@ worth knowing if you would rather keep your own config and skip `terat set`:
 #           models: [{ id: <model> }]
 #   - id: agent-default-model
 #     config: { provider: myrouter, model: <model> }
+
+# opencode's header lives in the ai-sdk options object it already reads:
+#   "provider": { "terat": { "options": {
+#     "baseURL": "https://.../v1", "apiKey": "...",
+#     "headers": { "traceparent": "00-<trace>-<span>-01" } } } }
 ```
 
-Five traps that cost an afternoon each:
+Six traps that cost an afternoon each:
 
 - **Do not export `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` while using `pi`.**
   pi sees either and stops reading its own `models.json`, then calls that
@@ -286,6 +297,13 @@ Five traps that cost an afternoon each:
   a *newer* `dsh-base` whose `dsh-sandbox-local` is then missing: dsh dies at
   boot with `plugin(s) failed to load` before it ever reads a key. Install a
   line that agrees with itself, e.g. `@deepseek-ai/dsh@0.2.2-rc.3`.
+- **A `${var:+word}` with a brace in the word leaks a brace.** The natural way to
+  write an optional JSON fragment is
+  `"${traceparent:+,\"headers\":{…}}"`, and under `sh` it expands to a bare `}`
+  when the variable is unset. One stray brace in `opencode.json` and opencode
+  cannot parse its own config, on every plain run — the tracing path looked fine
+  and only the untraced one was broken. Build the fragment with an explicit `if`
+  instead, and let the test parse the generated file rather than search it.
 - **A model that cannot see pictures is usually a config that never said it
   could.** Three of the six decide *before asking* whether to attach an image,
   from the model entry: `"input":["text","image"]` for pi and dsh,
@@ -756,7 +774,7 @@ question is unaffected.
 | `TERAT_OTLP_DEBUG` | unset | `1` logs each post to `$TMPDIR/terat.otlp.log`; a path logs there |
 | `TERAT_TRACE` | unset | `1` traces (ask mode's `Ctrl+X t` sets it); `0` turns tracing off for this shell |
 | `TERAT_TRACE_ID` | minted by `--trace` | 32-hex trace id to propagate as `traceparent` |
-| `TERAT_TRACE_PROVIDER` | `terat` for a generated config, else `router` | provider name that carries the `traceparent` header |
+| `TERAT_TRACE_PROVIDER` | `terat` for a generated config, else `router` | provider name `pi`'s extension registers the header against |
 
 ## Tracing
 
@@ -926,21 +944,54 @@ id as `requests.trace_id`; `terat` also uses that id for the OTLP spans. One
 value then finds the same work in Laminar and in the router:
 
 ```sh
-export TERAT_TRACE_ID=$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')
+terat set trace on        # or: terat --trace
 ```
 
-Make it one command per question, not per shell — the id should identify a
-question, not a session. A loop or wrapper that sets it per call is enough.
+`terat` mints the id itself, so there is nothing to export by hand. `--trace`
+turns it on for one question, `terat set trace on` for every question after it,
+and `Ctrl+X t` at the prompt toggles the session and says which way it went. An
+id you do supply wins: `TERAT_TRACE_ID` in the environment is used as-is, which is
+what makes a wrapper or a batch job able to put many questions under one trace.
 
-`terat-trace.js` does the propagation. It is loaded with `pi -e`, so it exists
-only for that run, and it returns immediately when `TERAT_TRACE_ID` is unset.
+Every agent carries the header differently, and none of it is guessable. The one
+thing all six do *not* share is pi's mechanism: `-e` loads a JS module into pi,
+and appending it to the others is not a no-op — `claude` answers
+`error: unknown option '-e'` and `opencode` reads the flag as its own, so asking
+for a trace broke two agents outright. Each therefore gets the header where that
+agent actually reads it:
 
-That indirection is deliberate. pi resolves provider headers strictly: a header
-value that works out to nothing is a fatal error, not a skipped header. So the
-obvious implementation — a `traceparent` entry in `models.json` — breaks every
+| agent | how the header reaches the request |
+| --- | --- |
+| `pi` | `-e terat-trace.js`, loaded for that run only |
+| `claude` | `ANTHROPIC_CUSTOM_HEADERS="traceparent: …"` |
+| `codex` | `-c model_providers.terat.env_http_headers.traceparent=TERAT_TRACEPARENT` |
+| `opencode` | `options.headers` in the generated `opencode.json` |
+| `dsh` | `headers:` in the generated `profiles/headless/cordis.patch.yml` |
+| `grok` | nothing — see below |
+
+The id is minted *before* any config is generated, because four of the six carry
+it inside that config. Minting it later left the generated files with no id in
+them and the propagation silently absent: the trace posted, the span looked right,
+and the router had never heard of it.
+
+`grok` is the one agent that cannot join. It has no header option, no field in
+`config.toml`, no environment hook it documents, and nothing in its bundle reads
+`traceparent` — so it can post a span and cannot correlate the request. Ask it for
+a trace and you get the span half of the join and not the ledger half.
+
+For `pi`, the extension registers the header against a provider *name*, and a name
+that does not match the one in `models.json` is not an error: the header simply
+never goes out. terat's generated config calls its provider `terat`; only a
+hand-written router setup uses the other name. That mismatch was silent once and
+is now asserted.
+
+That indirection for pi is deliberate, and worth keeping even though the other
+agents write the header into a config. pi resolves provider headers strictly: a
+header value that works out to nothing is a fatal error, not a skipped header. So
+the obvious implementation — a `traceparent` entry in `models.json` — breaks every
 plain `pi` on any machine where `TERAT_TRACE_ID` is not exported, which is every
-machine but yours, and contradicts the point of installing one package.
-Measured, with the variable absent:
+machine but yours, and contradicts the point of installing one package. Measured,
+with the variable absent:
 
 ```
 API key auth failed for provider router: Failed to resolve provider
@@ -950,12 +1001,12 @@ header "traceparent" from environment variables: TERAT_TRACE_ID
 Loading it per run means there is no state to forget. `models.json` is never
 edited and `pi` on its own stays exactly as it was. Confirmed both ways: with the
 variables set the id reaches the router, and with them absent `pi` runs normally
-and sends no `traceparent` at all.
+and sends no `traceparent` at all. The four that write a config get theirs in a
+directory that exists only for that run, so nothing there is remembered either.
 
 This is optional in the same sense as `TERAT_OTLP`: nothing is propagated unless
-you set an id, and setting one without `TERAT_OTLP` is still useful, because the
-join lives in router's own database rather than in a trace backend.
-
+tracing is on, and tracing without `TERAT_OTLP` is still useful, because the join
+lives in router's own database rather than in a trace backend.
 
 ### Which model answers
 

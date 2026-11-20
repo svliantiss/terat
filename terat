@@ -456,6 +456,35 @@ else
 	esac
 fi
 
+# The trace id is minted here, before any config is generated, because four of
+# the six carry it *inside* that config: only pi has an extension mechanism that
+# can add a header afterwards. Minting it later left the generated files with no
+# id in them and the propagation silently absent.
+traceparent=''
+if [ "$trace_want" = 1 ] && [ -z "${TERAT_TRACE_ID:-}" ]; then
+	TERAT_TRACE_ID=$(od -An -tx1 -N16 /dev/urandom 2>/dev/null | tr -d ' \n')
+	case $TERAT_TRACE_ID in
+	????????????????????????????????) export TERAT_TRACE_ID ;;
+	*) TERAT_TRACE_ID='' ;;
+	esac
+fi
+# `trace off` wins over an exported id, in both halves. Propagating the header
+# while the span is suppressed tags the router's ledger and posts nothing, which
+# is exactly the split one trace id exists to prevent.
+if [ "$trace_want" != off ] && [ -n "${TERAT_TRACE_ID:-}" ]; then
+	# The span id is the other half of a traceparent and is per request, so it is
+	# minted once here rather than in each branch below, where the copies drift.
+	trace_span=${TERAT_TRACE_SPAN:-$(od -An -tx1 -N8 /dev/urandom 2>/dev/null | tr -d ' \n')}
+	case $trace_span in
+	????????????????) ;;
+	*) trace_span=$(printf '%016x' $$) ;;
+	esac
+	TERAT_TRACE_SPAN=$trace_span
+	export TERAT_TRACE_SPAN
+	# 00-<trace>-<span>-01: the W3C shape the router parses back out.
+	traceparent="00-${TERAT_TRACE_ID}-${trace_span}-01"
+fi
+
 # Settings only matter if they reach the agent, and each agent is reached
 # differently. This is all of that difference.
 cfg_url=$(cfg_get url)
@@ -475,6 +504,12 @@ if [ -n "$cfg_url$cfg_key$cfg_model" ]; then
 		[ -n "$cfg_url" ] && export ANTHROPIC_BASE_URL=${cfg_url%/v1}
 		[ -n "$cfg_url" ] && export ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL%/}
 		[ -n "$cfg_key" ] && export ANTHROPIC_API_KEY=$cfg_key
+		# claude has no header flag but does read a header list from the
+		# environment, newline separated `Name: value`.
+		[ -n "$traceparent" ] && {
+			ANTHROPIC_CUSTOM_HEADERS="traceparent: $traceparent"
+			export ANTHROPIC_CUSTOM_HEADERS
+		}
 		[ -n "$cfg_model" ] && model_arg="--model $cfg_model" ;;
 	grok)
 		[ -n "$cfg_url" ] && export GROK_BASE_URL=$cfg_url
@@ -508,8 +543,13 @@ if [ -n "$cfg_url$cfg_key$cfg_model" ]; then
 		mkdir -p "$odir" 2>/dev/null
 		# Same lesson as pi, different spelling: without `modalities` opencode
 		# treats the model as text-only and refuses to attach the file.
-		printf '{"$schema":"https://opencode.ai/config.json","provider":{"terat":{"npm":"@ai-sdk/openai-compatible","name":"terat","options":{"baseURL":"%s","apiKey":"%s"},"models":{"%s":{"name":"%s","modalities":{"input":["text","image"]}}}}},"model":"terat/%s"}\n' \
-			"${cfg_url:-http://127.0.0.1:1/v1}" "${cfg_key:-none}" \
+		# The header fragment is built by hand: `${var:+word}` with a brace in the
+		# word leaves a literal `}` behind when the variable is unset, which is one
+		# stray brace in the JSON and a config opencode cannot parse.
+		oc_hdr=''
+		[ -n "$traceparent" ] && oc_hdr=",\"headers\":{\"traceparent\":\"$traceparent\"}"
+		printf '{"$schema":"https://opencode.ai/config.json","provider":{"terat":{"npm":"@ai-sdk/openai-compatible","name":"terat","options":{"baseURL":"%s","apiKey":"%s"%s},"models":{"%s":{"name":"%s","modalities":{"input":["text","image"]}}}}},"model":"terat/%s"}\n' \
+			"${cfg_url:-http://127.0.0.1:1/v1}" "${cfg_key:-none}" "$oc_hdr" \
 			"${cfg_model:-none}" "${cfg_model:-none}" "${cfg_model:-none}" \
 			>"$odir/opencode.json" 2>/dev/null
 		OPENCODE_CONFIG_DIR=$odir
@@ -526,6 +566,13 @@ if [ -n "$cfg_url$cfg_key$cfg_model" ]; then
 		extra="$extra -c model_providers.terat.name=terat -c model_providers.terat.wire_api=responses"
 		[ -n "$cfg_url" ] && extra="$extra -c model_provider=terat"
 		[ -n "$cfg_key" ] && { TERAT_KEY=$cfg_key; export TERAT_KEY; }
+		# codex cannot express a header map on the command line, but
+		# `env_http_headers` maps a header name to an env var, which it can.
+		[ -n "$traceparent" ] && {
+			TERAT_TRACEPARENT=$traceparent
+			export TERAT_TRACEPARENT
+			extra="$extra -c model_providers.terat.env_http_headers.traceparent=TERAT_TRACEPARENT"
+		}
 		codex_extra=$extra ;;
 	dsh)
 		# dsh names an env var rather than holding a key, and the variable has to
@@ -537,8 +584,16 @@ if [ -n "$cfg_url$cfg_key$cfg_model" ]; then
 		# `input` matters here for the same reason it does in pi's models.json:
 		# dsh bundles the same library and drops an image the model entry does not
 		# claim, so without it the answer says the model cannot see pictures.
-		printf -- '- id: llm-pi-ai\n  config:\n    providers:\n      terat:\n        displayName: terat\n        apiKeyEnv: TERAT_KEY\n        api: openai-completions\n        baseURL: %s\n        models:\n          - id: %s\n            name: %s\n            input: ["text", "image"]\n- id: agent-default-model\n  config:\n    provider: terat\n    model: %s\n' \
-			"${cfg_url:-http://127.0.0.1:1/v1}" "${cfg_model:-none}" \
+		# The header lines are built as real newlines rather than %s carrying \n,
+		# because printf leaves escapes that arrive through an argument literal:
+		# the YAML got a backslash-n and dsh read no headers at all.
+		dsh_hdr=''
+		[ -n "$traceparent" ] &&
+			dsh_hdr="        headers:
+          traceparent: $traceparent
+"
+		printf -- '- id: llm-pi-ai\n  config:\n    providers:\n      terat:\n        displayName: terat\n        apiKeyEnv: TERAT_KEY\n        api: openai-completions\n        baseURL: %s\n%s        models:\n          - id: %s\n            name: %s\n            input: ["text", "image"]\n- id: agent-default-model\n  config:\n    provider: terat\n    model: %s\n' \
+			"${cfg_url:-http://127.0.0.1:1/v1}" "$dsh_hdr" "${cfg_model:-none}" \
 			"${cfg_model:-none}" "${cfg_model:-none}" \
 			>"$ddir/profiles/headless/cordis.patch.yml" 2>/dev/null
 		[ -n "$cfg_key" ] && { TERAT_KEY=$cfg_key; export TERAT_KEY; }
@@ -652,7 +707,11 @@ case $trace_id in
 *[!0-9a-f]*) trace_id= ;;
 esac
 [ ${#trace_id} -eq 32 ] || trace_id=
-if [ -n "$trace_id" ] && [ -z "${TERAT_CMD:-}" ]; then
+# The extension is pi's alone: `-e` loads a JS module into pi, and appending it
+# to the other five is not a no-op — claude answers "unknown option '-e'" and
+# opencode reads it as its own flag, so asking for a trace broke two agents
+# outright. The other four carry the header in their own config instead.
+if [ -n "$trace_id" ] && [ -z "${TERAT_CMD:-}" ] && [ "$agent" = pi ]; then
 	trace_span=${TERAT_TRACE_SPAN:-$(od -An -tx1 -N8 /dev/urandom 2>/dev/null | tr -d ' \n')}
 	case $trace_span in
 	????????????????) ;;
