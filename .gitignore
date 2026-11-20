@@ -15,3 +15,7 @@ test/.build.log
 # *.local.md note cannot be swept in by `git add -A` either.
 RELEASE.local.md
 *.local.md
+
+# Local reference copy of the Agent Client Protocol docs. Fetched, not authored:
+# a tracked copy would rot and bloat the repo. Regenerate with the curl loop below.
+acp-docs.local/
