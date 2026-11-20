@@ -1108,5 +1108,28 @@ if command -v script >/dev/null 2>&1; then
 	note="$note+acp-tty"
 fi
 
+# Through a symlink, which is how terat is installed: a link in ~/.local/bin
+# pointing into a checkout. $0 is then the link, so the helper is not beside it
+# and the bridge used to work only when run from the checkout and fail from
+# PATH - which is where a client runs it.
+#
+# Run from a neutral directory on purpose. The fallback `./terat-acp.awk` means a
+# cwd holding the helper hides the bug entirely, which is how the first version
+# of this claim passed against the broken build.
+acp_neutral=$D/neutral
+mkdir -p "$acp_neutral"
+ln -sf "$D/terat" "$acp_neutral/terat" 2>/dev/null
+if [ -L "$acp_neutral/terat" ]; then
+	acp_out=$(cd "$acp_neutral" && printf '%s\n' \
+		'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1}}' |
+		TERAT_CMD=/tmp/acpstub.sh XDG_CONFIG_HOME="$D/home" \
+			sh ./terat acp 2>&1)
+	case $acp_out in
+	*'"protocolVersion":1'*) ;;
+	*) fail "acp failed when launched through a symlink: $acp_out" ;;
+	esac
+	note="$note+acp-symlink"
+fi
+
 echo "  note=$note"
 echo RESULT=PASS

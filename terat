@@ -415,13 +415,29 @@ if [ "${1:-}" = acp ]; then
 	shift
 	# Where this file and its awk helper live. Resolved here rather than with
 	# dir_of, which is defined further down and would be empty at this point.
+	# Follow a symlink first. `terat` is normally installed as one - a link in
+	# ~/.local/bin pointing into the checkout - and $0 is then the link, so the
+	# directory beside it holds no helper at all. The trace path already does
+	# this; the bridge failing here meant `terat acp` worked when run from the
+	# checkout and not when run from PATH, which is where a client runs it.
 	acp_self=$0
+	[ -L "$acp_self" ] && acp_self=$(readlink "$acp_self" 2>/dev/null && [ -n "$acp_self" ] || echo "$0")
+	# readlink may give a relative target, which is relative to the link's
+	# directory rather than the caller's.
+	case $acp_self in
+	/*) ;;
+	*/*)
+		acp_link=$0
+		case $acp_link in
+		*/*) acp_self=${acp_link%/*}/$acp_self ;;
+		esac ;;
+	esac
 	case $acp_self in
 	*/*) acp_dir=${acp_self%/*} ;;
 	*) acp_dir=. ;;
 	esac
 	acp_dir=$(cd "$acp_dir" 2>/dev/null && pwd) || acp_dir=.
-	acp_self=$acp_dir/$(basename "$0")
+	acp_self=$acp_dir/$(basename "$acp_self")
 	[ -f "$acp_self" ] && [ -r "$acp_self" ] || acp_self=$(command -v terat 2>/dev/null)
 	acp_awk=$acp_dir/terat-acp.awk
 	[ -f "$acp_awk" ] || acp_awk=./terat-acp.awk

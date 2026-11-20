@@ -848,7 +848,15 @@ recording, because none of them were guessable:
 | integer *and* string ids echoed with type | a string id came back **unquoted**, so the reply was not JSON |
 | cancel mid-turn → `stopReason: cancelled` | answered `end_turn`, because the turn was synchronous |
 
-The last two were the instructive ones. The unquoted string id was a real bug in
+A third bug was found by trying to use it rather than by testing it: `terat acp`
+worked when run from the checkout and failed from `PATH` with "cannot find
+terat-acp.awk". `terat` is normally installed as a **symlink** into a checkout, so
+`$0` is the link and the helper is not beside it. The trace path had resolved this
+for years; the bridge had not. The first claim written for it passed against the
+broken build, because the `./terat-acp.awk` fallback means a cwd holding the helper
+hides the bug — the claim now runs from a neutral directory.
+
+The last two protocol failures were the instructive ones. The unquoted string id was a real bug in
 a shipped code path, found only because a client sent `"id": "tck-string-id"`
 instead of a number. And cancel was structurally impossible: the turn blocked, so
 a stop button had nothing to reach. Making it interruptible needed the turn in the
