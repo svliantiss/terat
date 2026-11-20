@@ -42,7 +42,10 @@ redrawn after the fact — there is no flicker to have.
 | `terat.lua` | optional: the same thing under a Rex shortcut |
 
 Shell only: `sh`, `sleep`, `awk`, and one agent. No python, no jq, no curl — the
-agent does the network.
+agent does the network. `curl` is the one exception, and only for posting a trace:
+without it `terat` still answers and simply posts nothing, rather than failing a
+question because a telemetry endpoint is unreachable. A minimal container therefore
+needs `curl` installed only if you want traces out of it.
 
 ## Install
 
@@ -687,6 +690,80 @@ The same works outside the mode, and in bash or a container:
 terat @shot.png "what is this?"
 terat "#src" "summarise this folder"
 ```
+
+## Unattended: a VPS, a container, a cron job
+
+Everything above assumes someone is watching the screen. Nothing here needs one:
+`terat` never passes an approval flag, never opens a pager, and asks its question
+with stdin closed, which is the same code path as `terat q </dev/null`. The mode
+is the only part that wants a terminal, so unattended use is the plain form:
+
+```sh
+terat 'why did the nightly build fail?'        # asks, prints, appends to the thread
+```
+
+Two things differ from the laptop, and both bite quietly.
+
+**The agent's own sandbox is not terat's.** `terat` passes no autonomy or
+permission flag — it invokes each agent the way that agent's help says to — so
+whatever that agent does with no TTY is what you get. Measured on a fresh shell
+with stdin closed, each asked to create a file:
+
+| agent | asked to write, unattended | what it did |
+| --- | --- | --- |
+| `pi` | wrote it | content correct |
+| `grok` | wrote it | content correct |
+| `dsh` | wrote it | content correct |
+| `codex` | **could not** | `codex exec` defaults to `read-only` and says so |
+| `opencode` | **could not** | `permission requested …; auto-rejecting` |
+| `claude` | **said it wrote it** | no file existed, and it reported success anyway |
+
+The last row is the one to know about. `claude` reads files fine and writes
+nothing, and the answer is a confident "the file has been created". A script that
+checks exit status believes it. If a run has to change the machine, verify the
+effect rather than the answer, or give the agent permission explicitly:
+
+```sh
+opencode run --auto                     # auto-approve what is not denied
+codex exec --skip-git-repo-check -s workspace-write
+claude -p --permission-mode acceptEdits  # accepted, but did not fix writes here
+```
+
+Those are the agents' flags, not terat's, so they go through `TERAT_CMD` — which
+replaces the whole command, codex's generated `-c` overrides included. For codex
+that means spelling out the router settings you want as well:
+
+```sh
+TERAT_CMD="codex exec --skip-git-repo-check -s workspace-write \
+  -c model_providers.terat.base_url=$URL -c model=$MODEL \
+  -c model_provider=terat -c model_providers.terat.name=terat \
+  -c model_providers.terat.wire_api=responses \
+  -c model_providers.terat.env_key=TERAT_KEY" \
+  terat 'rebuild the index'
+```
+
+For `opencode` one flag is enough, and the generated config is still used:
+
+```sh
+TERAT_CMD='opencode run --auto' terat 'rebuild the index'
+```
+
+**Nothing is left running.** A question is one process tree that exits when the
+answer does; there is no daemon, no socket, no state to clean up after a reboot.
+The transcript is `~/.terat/thread.$$` — keyed on the parent shell, so a fresh
+container or a cron run starts one and it accumulates there unless you set
+`TERAT_THREAD`. Point it somewhere durable if the runs are supposed to remember
+each other:
+
+```sh
+TERAT_THREAD=/var/lib/terat/thread terat 'what changed since yesterday?'
+```
+
+The config is read from `$XDG_CONFIG_HOME/terat/settings` (mode 600, key in plain
+text), which is the only thing that has to persist. On a read-only container
+filesystem, set `TERAT_CONFIG` to a writable path, or run `terat set` once at build
+time and bake the file in — there is no separate environment interface for url,
+key and model, so a "just export it" recipe does not exist.
 
 ## While it waits
 
