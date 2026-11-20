@@ -401,6 +401,348 @@ attach)
 	exit 0 ;;
 esac
 
+# ACP: the same engine, addressed by a client instead of a prompt.
+#
+# A second face on terat, not a second program. A client sends JSON-RPC on stdin,
+# so this branch reads that instead of a question, and every turn it takes is
+# answered by this very script in a subshell - which is what keeps the terminal
+# and the bridge from drifting apart. What the bridge adds is only what JSON-RPC
+# needs: ids, sessions, and a stop reason.
+#
+# It runs before the agent is resolved and before stdin is read, because stdin
+# here is the transport rather than the question.
+if [ "${1:-}" = acp ]; then
+	shift
+	# Where this file and its awk helper live. Resolved here rather than with
+	# dir_of, which is defined further down and would be empty at this point.
+	acp_self=$0
+	case $acp_self in
+	*/*) acp_dir=${acp_self%/*} ;;
+	*) acp_dir=. ;;
+	esac
+	acp_dir=$(cd "$acp_dir" 2>/dev/null && pwd) || acp_dir=.
+	acp_self=$acp_dir/$(basename "$0")
+	[ -f "$acp_self" ] && [ -r "$acp_self" ] || acp_self=$(command -v terat 2>/dev/null)
+	acp_awk=$acp_dir/terat-acp.awk
+	[ -f "$acp_awk" ] || acp_awk=./terat-acp.awk
+	# Without the helper there is no JSON, and a bridge that cannot read a request
+	# must say so rather than emit frames of garbage.
+	if [ ! -r "$acp_awk" ]; then
+		printf 'terat: cannot find terat-acp.awk beside %s\n' "$0" >&2
+		printf 'terat: acp needs it; it ships next to terat\n' >&2
+		exit 1
+	fi
+	# `terat acp` typed at a prompt is a question about acp, not a request to
+	# serve one: reading a terminal as JSON-RPC would sit there eating keystrokes
+	# and answer nothing. A client always comes through a pipe or a socket.
+	if [ -t 0 ]; then
+		printf 'terat: acp speaks JSON-RPC on stdin, so it is for a client, not a prompt\n' >&2
+		printf 'terat: to ask about acp: terat "what is acp"\n' >&2
+		exit 2
+	fi
+
+	acp_n=0
+	# One JSON string, escaped. A question holds newlines and quotes, and either
+	# would end the string early and break every frame after it.
+	acp_esc() {
+		printf '%s' "$1" | awk -v mode=esc -f "$acp_awk"
+	}
+	# One field of a request, as bare text.
+	acp_get() {
+		printf '%s' "$2" | awk -v mode=get -v k="$1" -f "$acp_awk"
+	}
+	# The id, with its JSON type intact: a string id must go back quoted and a
+	# numeric one bare, or the reply stops being JSON-RPC.
+	acp_get_id() {
+		printf '%s' "$1" | awk -v mode=id -f "$acp_awk"
+	}
+	acp_reply() {
+		printf '{"jsonrpc":"2.0","id":%s,"result":%s}\n' "$1" "$2"
+	}
+	acp_error() {
+		printf '{"jsonrpc":"2.0","id":%s,"error":{"code":%s,"message":"%s"}}\n' \
+			"$1" "$2" "$(acp_esc "$3")"
+	}
+	# -32002 is Resource not found, and the spec wants the id that was not found
+	# in `data` so a client can tell which of its sessions is stale.
+	acp_no_session() {
+		printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32002,"message":"unknown session","data":{"sessionId":"%s"}}}\n' \
+			"$1" "$(acp_esc "$2")"
+	}
+	# A session is three things: the directory it works in, the model it asks, and
+	# the models it was offered. A client opens one session per project, and a
+	# switch in one must not leak into another.
+	acp_var() {
+		eval "printf '%s' \"\${acp_$1_$2:-}\""
+	}
+	# Whether an id names a session this bridge opened. Checked against a list
+	# rather than a variable, because an id never used must not read as known.
+	acp_known() {
+		case " $acp_sessions " in
+		*" $1 "*) [ -n "$1" ] ;;
+		*) return 1 ;;
+		esac
+	}
+	acp_sessions=''
+	acp_inited=''
+	# A directory for the turn's output and reader handshake, cleaned on exit
+	# however the bridge ends.
+	acp_tmp=$(mktemp -d "${TMPDIR:-/tmp}/terat-acp.XXXXXX" 2>/dev/null) || acp_tmp=${TMPDIR:-/tmp}
+	trap 'rm -rf "$acp_tmp"' EXIT INT TERM
+	# fd 4 is stdin as it was at start: the turn read the transport on 0, so a
+	# cancel has to be read from a duplicate that the turn cannot consume.
+	exec 4<&0
+
+	while IFS= read -r acp_line; do
+		case $acp_line in
+		*[![:space:]]*) ;;
+		*) continue ;; # a blank line carries nothing
+		esac
+		acp_id=$(acp_get_id "$acp_line")
+		acp_method=$(acp_get method "$acp_line")
+		# Everything except `initialize` needs it first: a client that opens a
+		# session before saying hello has not agreed a protocol version, and the
+		# spec calls that an invalid request rather than something to serve.
+		if [ -z "$acp_inited" ] && [ "$acp_method" != initialize ]; then
+			if [ -n "$acp_method" ]; then
+				acp_error "${acp_id:-null}" -32600 'initialize must come first'
+			else
+				acp_error "${acp_id:-null}" -32700 'not a JSON-RPC request'
+			fi
+			continue
+		fi
+		case $acp_method in
+		'')
+			# Not a request: a response to something this bridge never sends, or a
+			# frame it cannot read. Say so rather than dying, so one bad line
+			# cannot end a session.
+			acp_error "${acp_id:-null}" -32700 'not a JSON-RPC request' ;;
+		initialize)
+			# Version 1, and an honest capability list. `loadSession` is false:
+			# this bridge keeps no history, because terat's thread is the
+			# terminal's scrollback and a client that reloads would expect a
+			# store we do not have. `mcpCapabilities` is absent for the same
+			# reason: this bridge does not connect to MCP servers itself.
+			acp_inited=1
+			acp_reply "$acp_id" '{"protocolVersion":1,"agentCapabilities":{"loadSession":false,"promptCapabilities":{},"sessionCapabilities":{}},"authMethods":[{"id":"terat-config","name":"terat set","description":"Configure the endpoint with terat set url/key."}],"agentInfo":{"name":"terat","title":"terat","version":"1"}}' ;;
+		session/new)
+			# `cwd` is required by the spec, and a session without one would work
+			# in whatever directory the bridge started in - which is the client's
+			# guess, not its instruction.
+			acp_where=$(acp_get cwd "$acp_line")
+			if [ -z "$acp_where" ]; then
+				acp_error "$acp_id" -32602 'session/new needs a cwd'
+				continue
+			fi
+			acp_n=$((acp_n + 1))
+			acp_sid=sess_$acp_n
+			acp_sessions="$acp_sessions $acp_sid"
+			eval "acp_dir_$acp_sid=\$acp_where"
+			acp_m=$(cfg_get model)
+			# The options are what `terat models` knows, so a client shows the
+			# same list the terminal does instead of a hardcoded guess. The probe
+			# needs curl and an endpoint, so it is best-effort: a bridge on a box
+			# with neither still opens a session with the current model alone.
+			acp_opts=''
+			acp_vals=''
+			acp_url=$(cfg_get url)
+			if [ -n "$acp_url" ] && command -v curl >/dev/null 2>&1; then
+				acp_list=$(curl -s -m 8 "$acp_url/models" 2>/dev/null | tr -d '\n\r' |
+					awk '{
+							s = $0
+							while ((i = index(s, "\"id\":")) > 0) {
+								s = substr(s, i + 5)
+								sub(/^[ \t]*"/, "", s)
+								n = index(s, "\"")
+								if (n == 0) break
+								printf "%s\n", substr(s, 1, n - 1)
+								s = substr(s, n + 1)
+							}
+						}' 2>/dev/null)
+				for _am in $acp_list; do
+					acp_opts="$acp_opts${acp_opts:+,}{\"value\":\"$(acp_esc "$_am")\",\"name\":\"$(acp_esc "$_am")\"}"
+					acp_vals="$acp_vals $_am"
+				done
+			fi
+			# An empty value is not a model, so it is never advertised: the
+			# session's own model comes first when the catalog is unavailable.
+			case " $acp_vals " in
+			*" $acp_m "*) ;;
+			*) [ -n "$acp_m" ] && acp_vals="$acp_vals $acp_m" && acp_opts="${acp_opts:+,}{\"value\":\"$(acp_esc "$acp_m")\",\"name\":\"$(acp_esc "$acp_m")\"}" ;;
+			esac
+			[ -n "$acp_opts" ] || acp_opts='{"value":"default","name":"default"}'
+			[ -n "$acp_vals" ] || acp_vals=' default'
+			acp_m=${acp_m:-default}
+			# The offered values are kept: a switch to anything else is a client
+			# bug, and answering it as if it worked would leave the session
+			# asking a model that does not exist.
+			eval "acp_vals_$acp_sid=\$acp_vals"
+			acp_reply "$acp_id" "{\"sessionId\":\"$acp_sid\",\"configOptions\":[{\"type\":\"select\",\"id\":\"model\",\"category\":\"model\",\"name\":\"Model\",\"currentValue\":\"$(acp_esc "$acp_m")\",\"options\":[$acp_opts]}],\"modes\":{\"currentModeId\":\"ask\",\"availableModes\":[{\"id\":\"ask\",\"name\":\"Ask\",\"description\":\"One question, one answer.\"}]}}" ;;
+		session/set_config_option)
+			acp_sid=$(acp_get sessionId "$acp_line")
+			acp_cfg=$(acp_get configId "$acp_line")
+			acp_val=$(acp_get value "$acp_line")
+			# `model` is the only option this bridge advertises, so anything else
+			# is the client's mistake rather than a setting to invent.
+			if ! acp_known "$acp_sid"; then
+				acp_no_session "$acp_id" "$acp_sid"
+			elif [ "$acp_cfg" != model ]; then
+				acp_error "$acp_id" -32602 "no such config option: $acp_cfg"
+			elif [ -z "$acp_val" ]; then
+				acp_error "$acp_id" -32602 'no value'
+			else
+				# Only a value the session advertised is accepted: answering a
+				# model switch that cannot be honoured would leave the session
+				# asking something that does not exist, in silence.
+				case " $(acp_var vals "$acp_sid") " in
+				*" $acp_val "*)
+					eval "acp_model_$acp_sid=\$acp_val"
+					acp_reply "$acp_id" "{\"configOptions\":[{\"type\":\"select\",\"id\":\"model\",\"category\":\"model\",\"name\":\"Model\",\"currentValue\":\"$(acp_esc "$acp_val")\"}]}" ;;
+				*) acp_error "$acp_id" -32602 "unsupported value for model: $acp_val" ;;
+				esac
+			fi ;;
+		session/set_mode)
+			# The spec has no model in `set_mode`, but the reference client library
+			# (0.4.5) sends this method for setSessionModel - a copy-paste of its
+			# own setSessionMode. Accepting a modelId here costs one branch and
+			# makes a client that has that bug work instead of failing a switch.
+			acp_sid=$(acp_get sessionId "$acp_line")
+			acp_val=$(acp_get modelId "$acp_line")
+			if ! acp_known "$acp_sid"; then
+				acp_no_session "$acp_id" "$acp_sid"
+			elif [ -z "$acp_val" ]; then
+				# A real mode switch. `ask` is the only mode, so acknowledging
+				# the one we have and refusing the rest is the honest answer.
+				acp_val=$(acp_get modeId "$acp_line")
+				if [ "$acp_val" = ask ]; then
+					acp_reply "$acp_id" '{}'
+				else
+					acp_error "$acp_id" -32602 "no such mode: $acp_val"
+				fi
+			else
+				eval "acp_model_$acp_sid=\$acp_val"
+				acp_reply "$acp_id" '{}'
+			fi ;;
+		session/prompt)
+			acp_sid=$(acp_get sessionId "$acp_line")
+			if ! acp_known "$acp_sid"; then
+				acp_no_session "$acp_id" "$acp_sid"
+				continue
+			fi
+			acp_where=$(acp_var dir "$acp_sid")
+			acp_q=$(printf '%s' "$acp_line" | awk -v mode=text -f "$acp_awk")
+			if [ -z "$acp_q" ]; then
+				acp_error "$acp_id" -32602 'no text content in prompt'
+				continue
+			fi
+			acp_mdl=$(acp_var model "$acp_sid")
+			[ -n "$acp_mdl" ] || acp_mdl=$(cfg_get model)
+			# The turn as the client sees it: the question acknowledged, the
+			# answer, then a stop reason.
+			acp_reply_q=$(acp_esc "$acp_q")
+			printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"%s","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"%s"}}}}\n' "$acp_sid" "$acp_reply_q"
+			# The turn runs in the background so `session/cancel` can reach it
+			# while it is still working. A GUI's stop button is the whole reason
+			# the protocol has a cancel: a bridge that only noticed after the
+			# answer arrived would have nothing to stop.
+			#
+			# Asked of this same script, in the session's directory. The model is
+			# a per-invocation override rather than `terat set model`, so a client
+			# switching models cannot rewrite the saved default of whoever ran it.
+			acp_outf=$acp_tmp/ans.$$
+			acp_pidf=$acp_tmp/pid.$$
+			(
+				cd "$acp_where" 2>/dev/null || cd .
+				# The question is fed on stdin, never the terminal and never the
+				# transport. Closing it instead would work for grok and dsh, which
+				# take the question in argv, and break every agent that reads it
+				# from stdin - which is five of the six.
+				if [ -n "$acp_mdl" ]; then
+					printf '%s\n' "$acp_q" | TERAT_ACP_MODEL=$acp_mdl "$acp_self" 2>&1
+				else
+					printf '%s\n' "$acp_q" | "$acp_self" 2>&1
+				fi
+			) >"$acp_outf" 2>&1 &
+			acp_child=$!
+			printf '%s' "$acp_child" >"$acp_pidf"
+
+			# We cannot `read` and wait at once, so the wait is a poll. The
+			# child is reaped with `kill -0`, which is portable everywhere.
+			acp_cancelled=''
+			while kill -0 "$acp_child" 2>/dev/null; do
+				# A line that arrives while the turn runs can only be a cancel:
+				# ACP clients do not pipeline requests onto a busy session.
+				#
+				# Read in the background rather than with `read -t`, which dash
+				# does not have at all and older bash only takes in whole
+				# seconds. A ready file says the reader got a line.
+				rm -f "$acp_tmp/line.$$"
+				( IFS= read -r acp_l <&4 2>/dev/null && printf '%s' "$acp_l" >"$acp_tmp/line.$$" ) &
+				acp_rdr=$!
+				# Wait for the reader, the child, or a second of silence.
+				acp_w=0
+				while [ "$acp_w" -lt 10 ] && kill -0 "$acp_rdr" 2>/dev/null &&
+					kill -0 "$acp_child" 2>/dev/null; do
+					sleep 0.1 2>/dev/null || sleep 1
+					acp_w=$((acp_w + 1))
+				done
+				kill "$acp_rdr" 2>/dev/null
+				wait "$acp_rdr" 2>/dev/null
+				if [ -f "$acp_tmp/line.$$" ]; then
+					acp_more=$(cat "$acp_tmp/line.$$" 2>/dev/null)
+					rm -f "$acp_tmp/line.$$"
+					case $acp_more in
+					*session/cancel*)
+						acp_cancelled=1
+						kill "$acp_child" 2>/dev/null
+						# Give the agent a moment to persist, then insist:
+						# a stuck model call must not outlive the cancel.
+						acp_w=0
+						while kill -0 "$acp_child" 2>/dev/null && [ "$acp_w" -lt 30 ]; do
+							sleep 0.1 2>/dev/null || sleep 1
+							acp_w=$((acp_w + 1))
+						done
+						kill -9 "$acp_child" 2>/dev/null
+						break ;;
+					*) : ;; # something else arrived mid-turn; ignore it
+					esac
+				fi
+			done
+			wait "$acp_child" 2>/dev/null
+			acp_rc=$?
+			acp_ans=$(cat "$acp_outf" 2>/dev/null)
+			rm -f "$acp_outf" "$acp_pidf"
+			if [ -n "$acp_cancelled" ]; then
+				# `cancelled` is the spec's word for a turn the client stopped. It
+				# is a success result, not an error: the turn ended the way it was
+				# asked to, and an error would read as a failure.
+				acp_reply "$acp_id" '{"stopReason":"cancelled"}'
+				continue
+			fi
+			if [ "$acp_rc" -ne 0 ] && [ -z "$acp_ans" ]; then
+				# A failed run must not read as an empty answer with a happy stop
+				# reason: a client would store the blank reply as the result.
+				acp_error "$acp_id" -32000 "the agent failed (exit $acp_rc)"
+				continue
+			fi
+			printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"%s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"%s"}}}}\n' "$acp_sid" "$(acp_esc "$acp_ans")"
+			acp_reply "$acp_id" '{"stopReason":"end_turn"}' ;;
+		session/cancel)
+			# Answered even though the polling loop above consumes the cancel:
+			# a client that sends it as a request rather than a notification is
+			# not left waiting for a reply that never comes.
+			acp_reply "$acp_id" '{}' ;;
+		authenticate | logout)
+			acp_reply "$acp_id" '{}' ;;
+		*)
+			# Includes fs/* and terminal/*: not advertised above, so naming the
+			# method is more useful than a silent success.
+			[ -n "$acp_id" ] && acp_error "$acp_id" -32601 "method not found: $acp_method" ;;
+		esac
+	done
+	exit 0
+fi
+
 # Which agent answers this question. The command line beats the saved default:
 # `terat set agent claude` is what you normally want, and `terat grok "…"` is
 # how you ask one question of something else.
@@ -490,6 +832,10 @@ fi
 cfg_url=$(cfg_get url)
 cfg_key=$(cfg_get key)
 cfg_model=$(cfg_get model)
+# ACP asks a turn with a model of its own choosing. It is an override for this one
+# run and never a `terat set model`, so a client switching models cannot rewrite
+# the saved default of whoever started the bridge.
+[ -n "${TERAT_ACP_MODEL:-}" ] && cfg_model=$TERAT_ACP_MODEL
 if [ -n "$cfg_url$cfg_key$cfg_model" ]; then
 	# The model is a command-line flag for the agents that spell one and a field
 	# in the generated file for the two that do not. Sending it as an env var

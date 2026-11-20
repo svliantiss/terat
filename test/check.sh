@@ -887,5 +887,226 @@ if command -v python3 >/dev/null 2>&1; then
 	note="$note+spin"
 fi
 
+# --- ACP ------------------------------------------------------------------
+# The bridge is JSON-RPC on stdin and out, so these claims send frames and read
+# frames. A stub agent stands in for a real one: the claims are about the
+# protocol, and a model's opinion would make them slow and non-deterministic.
+# TERAT_CMD replaces the whole command, which is what a stub needs.
+cat >/tmp/acpstub.sh <<'SH'
+#!/bin/sh
+cat >/dev/null
+printf 'STUB_ANSWER\n'
+SH
+chmod +x /tmp/acpstub.sh
+
+acp_send() {
+	printf '%s\n' "$@" |
+		TERAT_CMD=/tmp/acpstub.sh XDG_CONFIG_HOME="$D/home" sh "$D/terat" acp 2>/dev/null
+}
+
+# initialize must answer version 1 and name this harness: the version check is
+# the first thing a client does, and a wrong answer ends the conversation there.
+acp_out=$(acp_send '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1}}')
+case $acp_out in
+*'"protocolVersion":1'*) ;;
+*) fail "acp initialize did not answer protocolVersion 1: $acp_out" ;;
+esac
+case $acp_out in
+*'"name":"terat"'*) ;;
+*) fail "acp initialize did not name terat: $acp_out" ;;
+esac
+note="$note+acp-init"
+
+# A full turn: the answer must arrive as an agent_message_chunk before the
+# result, because that is where a client looks for the text.
+acp_out=$(acp_send \
+	'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1}}' \
+	'{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/tmp"}}' \
+	'{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"sess_1","prompt":[{"type":"text","text":"say it"}]}}')
+case $acp_out in
+*'"sessionUpdate":"agent_message_chunk"'*STUB_ANSWER*) ;;
+*) fail "acp prompt did not stream the answer: $acp_out" ;;
+esac
+case $acp_out in
+*'"stopReason":"end_turn"'*) ;;
+*) fail "acp prompt did not end the turn: $acp_out" ;;
+esac
+note="$note+acp-turn"
+
+# STUB_ANSWER can only appear if the bridge ran an agent, and TERAT_CMD is read
+# by the engine rather than the bridge - so the turn went through this script
+# rather than being answered in the protocol layer.
+case $acp_out in
+*'"stopReason"'*) ;;
+*) fail "acp did not reach the engine: $acp_out" ;;
+esac
+note="$note+acp-engine"
+
+# Every frame must be a whole JSON object, and an answer holding a quote and a
+# newline must survive escaping. Both are checked, because the braces alone are
+# satisfied by a frame that silently drops what it could not escape.
+cat >/tmp/acpesc.sh <<'SH'
+#!/bin/sh
+cat >/dev/null
+printf 'a"b\nc\\d\n'
+SH
+chmod +x /tmp/acpesc.sh
+acp_out=$(printf '%s\n' \
+	'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1}}' \
+	'{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/tmp"}}' \
+	'{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"sess_1","prompt":[{"type":"text","text":"q"}]}}' |
+	TERAT_CMD=/tmp/acpesc.sh XDG_CONFIG_HOME="$D/home" sh "$D/terat" acp 2>/dev/null)
+acp_bad=$(printf '%s\n' "$acp_out" | awk '!/^\{.*\}$/' | head -1)
+[ -z "$acp_bad" ] || fail "acp produced a malformed frame: $acp_bad"
+# The answer is `a"b` then newline then `c\d`. Escaped, it is a\"b\nc\\d, and the
+# chunk must hold exactly that: a raw quote would have broken the frame above,
+# and a raw newline would have split this line into two.
+case $acp_out in
+*'a\"b\nc\\d'*) ;;
+*) fail "acp did not escape the answer: $(printf '%s' "$acp_out" | grep agent_message | head -1)" ;;
+esac
+note="$note+acp-esc"
+
+# An unknown session must be an error. A client that mistypes an id has to be
+# told, or it waits forever for a turn that will never start.
+acp_out=$(acp_send \
+	'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1}}' \
+	'{"jsonrpc":"2.0","id":2,"method":"session/prompt","params":{"sessionId":"nope","prompt":[{"type":"text","text":"x"}]}}')
+case $acp_out in
+*'"error"'*'unknown session'*) ;;
+*) fail "acp did not reject an unknown session: $acp_out" ;;
+esac
+note="$note+acp-err"
+
+# A method we do not implement must say so by name. fs/* is the sharp case:
+# advertising it and doing nothing would silently lose a client's edits.
+acp_out=$(acp_send \
+	'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1}}' \
+	'{"jsonrpc":"2.0","id":2,"method":"fs/read_text_file","params":{"path":"/etc/passwd"}}')
+case $acp_out in
+*'-32601'*'fs/read_text_file'*) ;;
+*) fail "acp did not refuse fs/read_text_file: $acp_out" ;;
+esac
+note="$note+acp-refuse"
+
+# An id must come back with its type. A numeric id that gains quotes cannot be
+# matched to its request, and a string id that loses them makes the frame not
+# JSON at all - the official TCK failed exactly this way.
+acp_out=$(acp_send '{"jsonrpc":"2.0","id":7,"method":"initialize","params":{"protocolVersion":1}}')
+case $acp_out in
+*'"id":7,'*) ;;
+*) fail "acp did not echo a numeric id: $acp_out" ;;
+esac
+acp_out=$(acp_send '{"jsonrpc":"2.0","id":"abc","method":"initialize","params":{"protocolVersion":1}}')
+case $acp_out in
+*'"id":"abc",'*) ;;
+*) fail "acp did not echo a string id quoted: $acp_out" ;;
+esac
+note="$note+acp-id"
+
+# The spec's error codes are not interchangeable: -32002 is Resource not found
+# and carries the id in data, while -32602 is a client mistake. A client
+# distinguishes a stale session from a bad request by these codes alone.
+acp_out=$(acp_send \
+	'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1}}' \
+	'{"jsonrpc":"2.0","id":2,"method":"session/prompt","params":{"sessionId":"nope","prompt":[{"type":"text","text":"x"}]}}')
+case $acp_out in
+*'-32002'*'"data":{"sessionId":"nope"'*) ;;
+*) fail "acp used the wrong code for an unknown session: $acp_out" ;;
+esac
+# session/new without cwd is invalid params, not a session in the bridge's own
+# directory: guessing the directory is the client's decision to make.
+acp_out=$(acp_send \
+	'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1}}' \
+	'{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"mcpServers":[]}}')
+case $acp_out in
+*'-32602'*'needs a cwd'*) ;;
+*) fail "acp accepted session/new without a cwd: $acp_out" ;;
+esac
+# Nothing but initialize may come first: a client that opens a session before
+# agreeing a protocol version has not been served, it has been guessed at.
+acp_out=$(acp_send '{"jsonrpc":"2.0","id":1,"method":"session/new","params":{"cwd":"/tmp"}}')
+case $acp_out in
+*'-32600'*'initialize'*) ;;
+*) fail "acp served a request before initialize: $acp_out" ;;
+esac
+note="$note+acp-codes"
+
+# A cancel must reach a turn that is still running, and the turn must end with
+# `stopReason: cancelled` as a success result. A bridge that only noticed after
+# the answer arrived would have nothing to stop, which is the GUI stop button.
+cat >/tmp/acpslow.sh <<'SH'
+#!/bin/sh
+cat >/dev/null
+sleep 20
+printf 'TOO_LATE\n'
+SH
+chmod +x /tmp/acpslow.sh
+acp_start=$(date +%s)
+acp_out=$(
+	{
+		printf '%s\n' \
+			'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1}}' \
+			'{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/tmp"}}' \
+			'{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"sess_1","prompt":[{"type":"text","text":"slow"}]}}'
+		sleep 2
+		printf '%s\n' '{"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":"sess_1"}}'
+		sleep 2
+	} | TERAT_CMD=/tmp/acpslow.sh XDG_CONFIG_HOME="$D/home" sh "$D/terat" acp 2>/dev/null)
+acp_end=$(date +%s)
+case $acp_out in
+*'"stopReason":"cancelled"'*) ;;
+*) fail "acp did not cancel a running turn: $(printf '%s' "$acp_out" | tail -1)" ;;
+esac
+# The agent sleeps 20s. If the cancel did not reach it this claim would sit here
+# until then, so the elapsed time is the proof that the turn was interrupted.
+[ $((acp_end - acp_start)) -lt 15 ] ||
+	fail "acp cancel did not interrupt the turn: took $((acp_end - acp_start))s"
+note="$note+acp-cancel"
+
+# A model switch is per session and must not rewrite the saved config: the
+# bridge's caller did not ask for a new default. The value must be one the
+# session advertised, so the claim reads the offered value out of the reply
+# rather than inventing one the bridge is right to refuse.
+acp_out=$(acp_send \
+	'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1}}' \
+	'{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/tmp"}}')
+acp_offer=$(printf '%s\n' "$acp_out" | sed -n 's/.*"options":\[{"value":"\([^"]*\)".*/\1/p' | head -1)
+[ -n "$acp_offer" ] || fail "acp advertised no model to switch to: $acp_out"
+acp_out=$(acp_send \
+	'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1}}' \
+	'{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/tmp"}}' \
+	"{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"session/set_config_option\",\"params\":{\"sessionId\":\"sess_1\",\"configId\":\"model\",\"value\":\"$acp_offer\"}}")
+case $acp_out in
+*"\"currentValue\":\"$acp_offer\""*) ;;
+*) fail "acp did not accept an advertised model: $acp_out" ;;
+esac
+case $(cat "$D/home/terat/settings" 2>/dev/null) in
+*model=$acp_offer*) fail "acp wrote the switched model into the saved config" ;;
+esac
+# A value that was never offered is the client's mistake, and answering as if
+# it worked would leave the session asking a model that does not exist.
+acp_out=$(acp_send \
+	'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1}}' \
+	'{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/tmp"}}' \
+	'{"jsonrpc":"2.0","id":3,"method":"session/set_config_option","params":{"sessionId":"sess_1","configId":"model","value":"_never_offered"}}')
+case $acp_out in
+*'-32602'*'unsupported value'*) ;;
+*) fail "acp accepted an unadvertised model: $acp_out" ;;
+esac
+note="$note+acp-model"
+
+# `terat acp` at a prompt is a question about acp, not a request to serve one.
+# The tell is a pty: reading a terminal as JSON-RPC would eat keystrokes and
+# answer nothing, so the bridge must refuse before it reads a frame.
+if command -v script >/dev/null 2>&1; then
+	acp_out=$(script -q /dev/null sh "$D/terat" acp 2>&1 </dev/null | tr -d '\r')
+	case $acp_out in
+	*'for a client, not a prompt'*) ;;
+	*) fail "acp did not refuse a terminal: $acp_out" ;;
+	esac
+	note="$note+acp-tty"
+fi
+
 echo "  note=$note"
 echo RESULT=PASS

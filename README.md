@@ -39,6 +39,7 @@ redrawn after the fact — there is no flicker to have.
 | --- | --- |
 | `terat` | asks the chosen agent one question, prints the answer, remembers it |
 | `terat.zsh` | the ask mode: glyph, Enter, `!`, Ctrl-C, plugins off |
+| `terat-acp.awk` | the three JSON jobs the ACP bridge needs: read a field, join prompt text, escape a string |
 | `terat.lua` | optional: the same thing under a Rex shortcut |
 
 Shell only: `sh`, `sleep`, `awk`, and one agent. No python, no jq, no curl — the
@@ -765,6 +766,106 @@ filesystem, set `TERAT_CONFIG` to a writable path, or run `terat set` once at bu
 time and bake the file in — there is no separate environment interface for url,
 key and model, so a "just export it" recipe does not exist.
 
+## ACP: another program asks, instead of you
+
+Everything above is one person typing. `terat acp` is the same engine with the
+question coming from a program: an editor, a GUI, an agent framework. It speaks
+[Agent Client Protocol](https://agentclientprotocol.com) v1 — JSON-RPC over stdio,
+one message per line — so any ACP client can drive it without knowing terat exists.
+
+```sh
+terat acp     # JSON-RPC in, JSON-RPC out; configured by terat set url key model
+```
+
+The point is that it is **not a second program**. A turn is answered by this same
+script in a subshell, so the terminal and the bridge cannot drift apart: same agent
+table, same config, same trace, same answer. What the bridge adds is only what
+JSON-RPC needs — ids, sessions, a stop reason.
+
+| Method | What it does |
+| --- | --- |
+| `initialize` | answers protocol version 1, names this harness, advertises no optional capabilities |
+| `session/new` | `cwd` becomes the working directory; `configOptions` offers the models `terat models` knows |
+| `session/set_config_option` | switches the model for that session only |
+| `session/prompt` | runs the turn: `user_message_chunk`, then `agent_message_chunk`, then `stopReason: end_turn` |
+| `session/cancel` | stops the turn while it is still running, and ends it with `stopReason: cancelled` |
+| anything else | `-32601 method not found`, with the method named |
+
+Three decisions worth knowing, because each one is the opposite of the convenient
+choice:
+
+**No `fs/*` and no `terminal/*`.** Those are client capabilities an agent may call,
+and implementing them means writing files on the client's behalf. terat's job is to
+ask a question, so a method it does not implement says so by name rather than
+answering `{}` — a silent success on `fs/write_text_file` would lose a client's edits.
+
+**`loadSession: false`.** terat's thread is the terminal's scrollback. Claiming
+replay would promise a store that does not exist.
+
+**`set_config_option` writes nothing.** The model is an override for that session,
+passed to the nested run as `TERAT_ACP_MODEL`, so a GUI switching models cannot
+rewrite the saved default of whoever started it.
+
+Three things it deliberately does not do yet, so nobody is surprised:
+
+- **Sessions are in-memory.** A client restart gets a new `sess_N`; there is no
+  `session/load` and no on-disk session store.
+- **No MCP.** `session/new` accepts an `mcpServers` list and ignores it, because
+  this bridge does not connect to MCP servers itself — it asks an agent, and the
+  agent's own MCP configuration is what applies. The official conformance kit
+  reports this as its one remaining advisory failure, which is the honest state.
+- **`terat acp` must not be typed at a prompt.** Reading a terminal as JSON-RPC
+  would eat keystrokes, so it refuses when stdin is a tty and points at
+  `terat "what is acp"` instead. A client always arrives through a pipe.
+
+The error codes are the spec's, not convenient approximations: `-32002` (Resource
+not found) with the offending id in `data` for a session that does not exist,
+`-32602` (Invalid params) for a `session/new` without `cwd` or a model value that
+was never offered, and `-32600` (Invalid request) for anything arriving before
+`initialize`. A client tells a stale session from its own mistake by those codes
+alone, so getting one wrong is not cosmetic.
+
+### Conformance
+
+The protocol has an official test kit, and it found real bugs that no amount of
+reading had. Run against this bridge:
+
+```sh
+uvx --from git+https://github.com/agentclientprotocol/acp-tck@v0.5.0 \
+  acp-tck -- sh terat acp
+```
+
+**66 passed, 1 failed.** The failure is `ACP-SESSION-004`, the advisory MCP test
+above. It started at 10 failures, and each one was a specific mistake worth
+recording, because none of them were guessable:
+
+| What the kit expected | What terat did |
+| --- | --- |
+| `session/new` without `cwd` → `-32602` | opened a session in the bridge's own directory |
+| unknown session → `-32002` + `data.sessionId` | `-32602`, no data |
+| any request before `initialize` → `-32600` | served it |
+| unknown `configId`, unoffered value → `-32602` | accepted both |
+| integer *and* string ids echoed with type | a string id came back **unquoted**, so the reply was not JSON |
+| cancel mid-turn → `stopReason: cancelled` | answered `end_turn`, because the turn was synchronous |
+
+The last two were the instructive ones. The unquoted string id was a real bug in
+a shipped code path, found only because a client sent `"id": "tck-string-id"`
+instead of a number. And cancel was structurally impossible: the turn blocked, so
+a stop button had nothing to reach. Making it interruptible needed the turn in the
+background and a portable poll — `read -t` is not in dash at all and only takes
+whole seconds in older bash, so the reader runs as its own process writing to a
+file.
+
+The bridge is about 340 lines in `terat`'s `acp)` branch — one `case` arm per
+method — plus about 105 in `terat-acp.awk`, which does the only three things `sh`
+cannot: read a field from a request, join the text of a prompt's content blocks,
+and escape a string so it can sit inside JSON. No SDK, no Node, no jq: a machine
+that can run `terat` can serve ACP.
+
+Most of that length is the spec's error handling rather than the happy path, which
+is the trade a bridge makes: the turn is a dozen lines, and telling a client
+precisely what it did wrong is the rest.
+
 ## While it waits
 
 A spinner turns on the line below the question and vanishes when the answer
@@ -1189,6 +1290,24 @@ The suite is falsified on purpose: delete the transcript line or the glyph
 fallback and it goes red, so a green run means something. Build failures are
 printed rather than skipped, because a distro that never built otherwise looks
 like a pass.
+
+ACP has its own claims, and they follow the same rule — each was broken on purpose
+and the suite went red. `initialize` answers version 1 and names terat; a full turn
+streams `agent_message_chunk` and ends with `stopReason: end_turn`; every frame is
+one whole JSON object and an answer holding a quote *and* a newline survives
+escaping intact; an unknown session is an error rather than a silent success;
+`fs/read_text_file` is refused by name; a numeric id comes back numeric, because a
+client that sent `1` and got `"1"` cannot match the reply to its request; a model
+switch does not touch the saved config; and `terat acp` refuses a terminal instead
+of reading keystrokes as JSON-RPC.
+
+Two of those claims were written wrong first and are worth remembering. The
+escaping claim originally checked only that each line had both braces, which a
+frame that drops what it cannot escape also satisfies — it passed against code with
+the escaper removed, and had to be rewritten to assert the escaped content. The
+model claim's first falsification attempt silently did not apply its edit, so the
+"broken" build passed and proved nothing; the guard was real only once the edit was
+verified to be in the file. A claim that cannot go red is not a claim.
 
 `test/real-pi.md` covers running it against the real `pi` in a container.
 

@@ -19,3 +19,7 @@ RELEASE.local.md
 # Local reference copy of the Agent Client Protocol docs. Fetched, not authored:
 # a tracked copy would rot and bloat the repo. Regenerate with the curl loop below.
 acp-docs.local/
+
+# Cloned upstream sources for reading, not vendored. Same reasoning as
+# acp-docs.local/: other people's code, fetched for reference.
+refs.local/
