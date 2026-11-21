@@ -1171,5 +1171,72 @@ case $acp_out in
 esac
 note="$note+acp-stderr"
 
+# A client must be able to choose the agent for its own session. ACP has no field
+# for "which harness", so it is a config option under the `_` category the spec
+# reserves for extensions; a client that ignores unknown categories still gets a
+# working session on the saved agent.
+cat >/tmp/acpwho.sh <<'SH'
+#!/bin/sh
+cat >/dev/null
+printf 'ANSWERED_BY=%s\n' "${TERAT_AGENT:-unset}"
+SH
+chmod +x /tmp/acpwho.sh
+acp_out=$(printf '%s\n' \
+	'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1}}' \
+	'{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/tmp"}}' \
+	'{"jsonrpc":"2.0","id":3,"method":"session/set_config_option","params":{"sessionId":"sess_1","configId":"_agent","value":"codex"}}' \
+	'{"jsonrpc":"2.0","id":4,"method":"session/prompt","params":{"sessionId":"sess_1","prompt":[{"type":"text","text":"q"}]}}' |
+	TERAT_CMD=/tmp/acpwho.sh XDG_CONFIG_HOME="$D/home" sh "$D/terat" acp 2>&1)
+case $acp_out in
+*'"id":"_agent"'*) ;;
+*) fail "acp did not offer a way to pick the agent: $acp_out" ;;
+esac
+# Answering `codex` in the reply is not the same as codex doing the work: this
+# asserts the name reached the process that answered.
+case $acp_out in
+*'ANSWERED_BY=codex'*) ;;
+*) fail "acp did not switch the agent for the session: $acp_out" ;;
+esac
+# A name that is not an agent is refused rather than stored.
+acp_out=$(printf '%s\n' \
+	'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1}}' \
+	'{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/tmp"}}' \
+	'{"jsonrpc":"2.0","id":3,"method":"session/set_config_option","params":{"sessionId":"sess_1","configId":"_agent","value":"not-an-agent"}}' |
+	TERAT_CMD=/tmp/acpwho.sh XDG_CONFIG_HOME="$D/home" sh "$D/terat" acp 2>&1)
+case $acp_out in
+*'-32602'*'no such agent'*) ;;
+*) fail "acp accepted an agent that does not exist: $acp_out" ;;
+esac
+note="$note+acp-agent"
+
+# A machine with nowhere to write a settings file must still be configurable.
+# This is what makes `docker run -e` work on a fresh image with no writable home.
+cat >/tmp/acpcfgpeek.sh <<'SH'
+#!/bin/sh
+cat >/dev/null
+printf 'ENV_CFG=%s\n' "$(cat "$PI_CODING_AGENT_DIR/models.json" 2>/dev/null)"
+SH
+chmod +x /tmp/acpcfgpeek.sh
+acp_out=$(printf 'q\n' |
+	HOME="$D/nowhere" XDG_CONFIG_HOME="$D/nowhere" \
+	TERAT_URL=http://env-host:1234/v1 TERAT_KEY=ENVKEY TERAT_MODEL=env/model-x \
+	TERAT_CMD=/tmp/acpcfgpeek.sh TERAT_THREAD="$D/envthread" \
+	sh "$D/terat" pi -- 2>&1)
+# The URL, the key and the model all have to land, because a config with two of
+# the three is a machine that looks configured and cannot answer.
+case $acp_out in
+*'http://env-host:1234/v1'*) ;;
+*) fail "env did not configure the endpoint: $acp_out" ;;
+esac
+case $acp_out in
+*'ENVKEY'*) ;;
+*) fail "env did not configure the key: $acp_out" ;;
+esac
+case $acp_out in
+*'env/model-x'*) ;;
+*) fail "env did not configure the model: $acp_out" ;;
+esac
+note="$note+env-config"
+
 echo "  note=$note"
 echo RESULT=PASS

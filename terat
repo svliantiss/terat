@@ -593,7 +593,19 @@ if [ "${1:-}" = acp ]; then
 			# bug, and answering it as if it worked would leave the session
 			# asking a model that does not exist.
 			eval "acp_vals_$acp_sid=\$acp_vals"
-			acp_reply "$acp_id" "{\"sessionId\":\"$acp_sid\",\"configOptions\":[{\"type\":\"select\",\"id\":\"model\",\"category\":\"model\",\"name\":\"Model\",\"currentValue\":\"$(acp_esc "$acp_m")\",\"options\":[$acp_opts]}],\"modes\":{\"currentModeId\":\"ask\",\"availableModes\":[{\"id\":\"ask\",\"name\":\"Ask\",\"description\":\"One question, one answer.\"}]}}" ;;
+			# The second option names the harness that answers this session. ACP
+			# has no field for "which agent", and inventing a method would not
+			# travel, so it is a config option with a `_` category - the prefix
+			# the spec reserves for extensions. A client that ignores unknown
+			# categories still gets a working session on the saved agent.
+			acp_agent_now=$(acp_var agent "$acp_sid")
+			[ -n "$acp_agent_now" ] || acp_agent_now=$(cfg_get agent)
+			acp_agent_now=${acp_agent_now:-pi}
+			acp_aopts=''
+			for _aa in $agents; do
+				acp_aopts="$acp_aopts${acp_aopts:+,}{\"value\":\"$_aa\",\"name\":\"$_aa\"}"
+			done
+			acp_reply "$acp_id" "{\"sessionId\":\"$acp_sid\",\"configOptions\":[{\"type\":\"select\",\"id\":\"model\",\"category\":\"model\",\"name\":\"Model\",\"currentValue\":\"$(acp_esc "$acp_m")\",\"options\":[$acp_opts]},{\"type\":\"select\",\"id\":\"_agent\",\"category\":\"_agent\",\"name\":\"Agent\",\"currentValue\":\"$(acp_esc "$acp_agent_now")\",\"options\":[$acp_aopts]}],\"modes\":{\"currentModeId\":\"ask\",\"availableModes\":[{\"id\":\"ask\",\"name\":\"Ask\",\"description\":\"One question, one answer.\"}]}}" ;;
 		session/set_config_option)
 			acp_sid=$(acp_get sessionId "$acp_line")
 			acp_cfg=$(acp_get configId "$acp_line")
@@ -602,6 +614,21 @@ if [ "${1:-}" = acp ]; then
 			# is the client's mistake rather than a setting to invent.
 			if ! acp_known "$acp_sid"; then
 				acp_no_session "$acp_id" "$acp_sid"
+			elif [ "$acp_cfg" = _agent ]; then
+				# The agent can be switched mid-session: a client that wants to
+				# compare two harnesses on one question should not have to open a
+				# second process. Only a name the session advertised is taken.
+				case " $agents " in
+				*" $acp_val "*)
+					[ -n "$acp_val" ] || { acp_error "$acp_id" -32602 'no value'; continue; }
+					eval "acp_agent_$acp_sid=\$acp_val"
+					acp_aopts=''
+					for _aa in $agents; do
+						acp_aopts="$acp_aopts${acp_aopts:+,}{\"value\":\"$_aa\",\"name\":\"$_aa\"}"
+					done
+					acp_reply "$acp_id" "{\"configOptions\":[{\"type\":\"select\",\"id\":\"_agent\",\"category\":\"_agent\",\"name\":\"Agent\",\"currentValue\":\"$(acp_esc "$acp_val")\",\"options\":[$acp_aopts]}]}" ;;
+				*) acp_error "$acp_id" -32602 "no such agent: $acp_val" ;;
+				esac
 			elif [ "$acp_cfg" != model ]; then
 				acp_error "$acp_id" -32602 "no such config option: $acp_cfg"
 			elif [ -z "$acp_val" ]; then
@@ -653,6 +680,11 @@ if [ "${1:-}" = acp ]; then
 			fi
 			acp_mdl=$(acp_var model "$acp_sid")
 			[ -n "$acp_mdl" ] || acp_mdl=$(cfg_get model)
+			# The agent this session is on. `terat <agent> --` puts the question
+			# on stdin and the name in argv, which is how a client's choice
+			# reaches the same script without a second config file.
+			acp_agn=$(acp_var agent "$acp_sid")
+			[ -n "$acp_agn" ] || acp_agn=$(cfg_get agent)
 			# The turn as the client sees it: the question acknowledged, the
 			# answer, then a stop reason.
 			acp_reply_q=$(acp_esc "$acp_q")
@@ -674,7 +706,11 @@ if [ "${1:-}" = acp ]; then
 				# transport. Closing it instead would work for grok and dsh, which
 				# take the question in argv, and break every agent that reads it
 				# from stdin - which is five of the six.
-				if [ -n "$acp_mdl" ]; then
+				if [ -n "$acp_agn" ] && [ -n "$acp_mdl" ]; then
+					printf '%s\n' "$acp_q" | TERAT_ACP_MODEL=$acp_mdl "$acp_self" "$acp_agn" --
+				elif [ -n "$acp_agn" ]; then
+					printf '%s\n' "$acp_q" | "$acp_self" "$acp_agn" --
+				elif [ -n "$acp_mdl" ]; then
 					printf '%s\n' "$acp_q" | TERAT_ACP_MODEL=$acp_mdl "$acp_self"
 				else
 					printf '%s\n' "$acp_q" | "$acp_self"
@@ -862,6 +898,14 @@ fi
 cfg_url=$(cfg_get url)
 cfg_key=$(cfg_get key)
 cfg_model=$(cfg_get model)
+# The environment wins over the file. A container, a fresh VPS or a CI runner has
+# nowhere to write a settings file, and `terat set` would need one: these three
+# are the whole interface, so a machine that can run terat can be configured with
+# `docker run -e` and nothing else. They also win over a file that a base image
+# shipped, which is what makes an override an override.
+cfg_url=${TERAT_URL:-$cfg_url}
+cfg_key=${TERAT_KEY:-$cfg_key}
+cfg_model=${TERAT_MODEL:-$cfg_model}
 # ACP asks a turn with a model of its own choosing. It is an override for this one
 # run and never a `terat set model`, so a client switching models cannot rewrite
 # the saved default of whoever started the bridge.

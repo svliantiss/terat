@@ -806,10 +806,21 @@ replay would promise a store that does not exist.
 passed to the nested run as `TERAT_ACP_MODEL`, so a GUI switching models cannot
 rewrite the saved default of whoever started it.
 
-The agent a session uses is the one in the saved config (`terat set agent`); a
-client cannot choose it, because ACP has no field for "which harness" and
-inventing one would not travel. One `terat acp` is one agent, and a client that
-wants another runs another process.
+The agent a session uses is the one in the saved config (`terat set agent`), and
+a client **can** change it per session. ACP has no field for "which harness", so
+it is a second `configOptions` entry with the id and category `_agent` — the
+underscore prefix is the spec's own marker for extensions, and a client that
+ignores unknown categories still gets a working session on the saved agent.
+
+```jsonc
+{"type":"select","id":"_agent","category":"_agent","name":"Agent",
+ "currentValue":"pi","options":[{"value":"pi","name":"pi"}, ...]}
+```
+
+Switching it mid-session takes effect on the next turn, so one process can ask
+the same question of two harnesses without being restarted. That was worth the
+extension rather than a private method: `_agent` travels as ordinary config, so
+Zed's option picker shows it without knowing anything about terat.
 
 All six agents answer through the bridge, but only where the agent itself is
 configured to run at all — the bridge inherits every one of their failures rather
@@ -827,6 +838,13 @@ than hiding them:
 That table is the argument for the error code above: three of those six fail for
 reasons that have nothing to do with this bridge, and a client sees the real
 reason instead of a blank answer with a happy stop reason.
+
+Configuration also arrives through the environment, which is what a machine with
+nowhere to write a settings file needs: `TERAT_URL`, `TERAT_KEY` and
+`TERAT_MODEL` override the file, so `docker run -e TERAT_URL=... -e TERAT_KEY=...`
+configures a fresh image with no writable home and no `terat set`. They win over a
+file on purpose — that is what makes an override an override — and a key supplied
+this way lands in the generated agent config, never in a file terat wrote.
 
 Three things it deliberately does not do yet, so nobody is surprised:
 
