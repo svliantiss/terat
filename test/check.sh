@@ -1235,6 +1235,35 @@ done
 [ "$acp_n" -eq 3 ] || fail "acp answered only $acp_n of 3 pipelined requests"
 note="$note+acp-pipeline"
 
+# A cancel names a session, and only that session's turn may stop. Killing
+# whichever turn happened to be running stopped the wrong conversation, which is
+# the exact thing a session id exists to prevent.
+cat >/tmp/acpiso.sh <<'SH'
+#!/bin/sh
+cat >/dev/null
+sleep 4
+printf 'COMPLETED\n'
+SH
+chmod +x /tmp/acpiso.sh
+acp_out=$(
+	{
+		printf '%s\n' \
+			'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1}}' \
+			'{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/tmp"}}' \
+			'{"jsonrpc":"2.0","id":3,"method":"session/new","params":{"cwd":"/tmp"}}' \
+			'{"jsonrpc":"2.0","id":4,"method":"session/prompt","params":{"sessionId":"sess_1","prompt":[{"type":"text","text":"a"}]}}'
+		sleep 1
+		printf '%s\n' '{"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":"sess_2"}}'
+		sleep 6
+	} | TERAT_CMD=/tmp/acpiso.sh XDG_CONFIG_HOME="$D/home" sh "$D/terat" acp 2>/dev/null)
+# sess_1's turn must reach its own end. A cancel for sess_2 that killed it would
+# show `cancelled` on id 4 instead.
+case $acp_out in
+*'"id":4,"result":{"stopReason":"end_turn"'*) ;;
+*) fail "a cancel for one session stopped another session's turn: $(printf '%s' "$acp_out" | grep -o '"id":4[^}]*}' | head -1)" ;;
+esac
+note="$note+acp-cancel-scope"
+
 # A machine with nowhere to write a settings file must still be configurable.
 # This is what makes `docker run -e` work on a fresh image with no writable home.
 cat >/tmp/acpcfgpeek.sh <<'SH'

@@ -899,6 +899,10 @@ alone, so getting one wrong is not cosmetic.
 
 ### Conformance
 
+The full compatibility and infra-fit assessment — what is implemented, what is
+refused and why, the measured protocol edges, and the one shape limit (turns are
+serial) — is in [`docs/acp-compatibility.md`](docs/acp-compatibility.md).
+
 The protocol has an official test kit, and it found real bugs that no amount of
 reading had. Run against this bridge:
 
@@ -959,7 +963,7 @@ background and a portable poll — `read -t` is not in dash at all and only take
 whole seconds in older bash, so the reader runs as its own process writing to a
 file.
 
-The bridge is about 340 lines in `terat`'s `acp)` branch — one `case` arm per
+The bridge is about 435 lines in `terat`'s `acp)` branch — one `case` arm per
 method — plus about 105 in `terat-acp.awk`, which does the only three things `sh`
 cannot: read a field from a request, join the text of a prompt's content blocks,
 and escape a string so it can sit inside JSON. No SDK, no Node, no jq: a machine

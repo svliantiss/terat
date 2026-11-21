@@ -772,6 +772,19 @@ if [ "${1:-}" = acp ]; then
 					rm -f "$acp_tmp/line.$$"
 					case $acp_more in
 					*session/cancel*)
+						# Only this session's cancel may stop this turn. A client
+						# running two sessions sends cancel for one of them, and
+						# killing whichever turn happened to be running stopped the
+						# wrong conversation - the whole point of a session id is
+						# that it names which one.
+						acp_csid=$(acp_get sessionId "$acp_more")
+						if [ -n "$acp_csid" ] && [ "$acp_csid" != "$acp_sid" ]; then
+							# Another session's cancel. Not ours to act on, and
+							# not ours to consume either: the loop must still see
+							# it when it gets there.
+							printf '%s\n' "$acp_more" >>"$acp_tmp/pending"
+							continue
+						fi
 						acp_cancelled=1
 						kill "$acp_child" 2>/dev/null
 						# Give the agent a moment to persist, then insist:
