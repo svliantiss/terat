@@ -913,6 +913,12 @@ for years; the bridge had not. The first claim written for it passed against the
 broken build, because the `./terat-acp.awk` fallback means a cwd holding the helper
 hides the bug — the claim now runs from a neutral directory.
 
+The test recipe had a bug of its own, worth recording because it looked like a
+terat failure: the suite copies the working tree, and a developer checkout can
+hold gitignored reference clones with read-only git packs, so the second run died
+with "Permission denied" and reported `FAIL copy source`. Staging only tracked
+files fixes it, and drops the copy from 446 MB to 324 KB.
+
 The last two protocol failures were the instructive ones. The unquoted string id was a real bug in
 a shipped code path, found only because a client sent `"id": "tck-string-id"`
 instead of a number. And cancel was structurally impossible: the turn blocked, so

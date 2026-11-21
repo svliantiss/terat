@@ -729,9 +729,9 @@ if [ "${1:-}" = acp ]; then
 				# take the question in argv, and break every agent that reads it
 				# from stdin - which is five of the six.
 				if [ -n "$acp_agn" ] && [ -n "$acp_mdl" ]; then
-					printf '%s\n' "$acp_q" | TERAT_ACP_MODEL=$acp_mdl "$acp_self" "$acp_agn" --
+					printf '%s\n' "$acp_q" | TERAT_ACP_AGENT=$acp_agn TERAT_ACP_MODEL=$acp_mdl "$acp_self"
 				elif [ -n "$acp_agn" ]; then
-					printf '%s\n' "$acp_q" | "$acp_self" "$acp_agn" --
+					printf '%s\n' "$acp_q" | TERAT_ACP_AGENT=$acp_agn "$acp_self"
 				elif [ -n "$acp_mdl" ]; then
 					printf '%s\n' "$acp_q" | TERAT_ACP_MODEL=$acp_mdl "$acp_self"
 				else
@@ -840,6 +840,12 @@ fi
 # how you ask one question of something else.
 agent=$(cfg_get agent)
 agent=${agent:-pi}
+# ACP names the agent it wants for this turn. An override rather than a
+# `terat set agent`, so a client switching harnesses cannot rewrite the saved
+# default; and an environment variable rather than extra argv, because the
+# question already travels on stdin and a trailing `--` was being read as the
+# question itself.
+agent=${TERAT_ACP_AGENT:-$agent}
 # `--trace` asks for a trace on this one question. It is a flag rather than a
 # variable because the useful moments are the irregular ones — a build that
 # failed once, a question worth keeping — and exporting a variable for those is
