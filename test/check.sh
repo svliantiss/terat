@@ -1293,6 +1293,84 @@ case $acp_out in
 esac
 note="$note+env-config"
 
+# An option terat does not know must be refused, not swallowed. `terat --inline`
+# used to be read as a question with the flag dropped, so a mistyped option
+# silently answered whatever line came next instead of saying it did not know the
+# word. Exit 2 and a message, with the accepted options named.
+printf '#!/bin/sh\ncat >/dev/null\nprintf "OPTION_OK\\n"\n' >"$D/optstub.sh"
+chmod +x "$D/optstub.sh"
+if printf 'q\n' | TERAT_CMD="$D/optstub.sh" XDG_CONFIG_HOME="$D/opth" \
+	sh "$D/terat" --no-such-option >/dev/null 2>&1; then
+	fail "an unknown option was accepted instead of refused"
+fi
+printf 'q\n' | TERAT_CMD="$D/optstub.sh" XDG_CONFIG_HOME="$D/opth" \
+	sh "$D/terat" --no-such-option 2>&1 | grep -q 'no such option' ||
+	fail "an unknown option was not named in the error"
+# And the real ones still reach the answer.
+for opt in --inline --below --trace; do
+	out=$(printf 'q\n' | TERAT_CMD="$D/optstub.sh" XDG_CONFIG_HOME="$D/opth" \
+		TERAT_THREAD="$D/optthread" sh "$D/terat" "$opt" -- 'q' 2>&1)
+	[ "$out" = OPTION_OK ] || fail "$opt is a real option but gave [$out]"
+done
+# `--inline` must be inherited by the shell `terat --inline` starts, because
+# inline only means anything in ask mode: run on its own, the engine has already
+# had its line ended by the shell and draws the same either way. The shell is a
+# stand-in that reports what it was given. This needs a tty: without a question
+# and with both ends a terminal is the only case that starts a shell at all, so a
+# piped run would test nothing.
+if command -v tmux >/dev/null 2>&1; then
+	printf '#!/bin/sh\nprintf "SPIN=%%s\\n" "${TERAT_SPIN:-}"\n' >"$D/fakeshell"
+	chmod +x "$D/fakeshell"
+	for pair in '--inline:inline' '--below:below'; do
+		opt=${pair%%:*}
+		want=${pair##*:}
+		tmux kill-session -t S 2>/dev/null
+		# `sleep` holds the pane open after the stand-in shell exits: when the
+		# session's only command finishes, tmux destroys the pane and the capture
+		# is empty, which read as "the flag did not arrive".
+		tmux new-session -d -s S -x 100 -y 20 \
+			"env TERAT_SHELL_BIN='$D/fakeshell' XDG_CONFIG_HOME='$D/opth' sh '$D/terat' $opt; sleep 5"
+		i2=0
+		while [ $i2 -lt 15 ]; do
+			sleep 1
+			tmux capture-pane -pt S 2>/dev/null | grep -q 'SPIN=' && break
+			i2=$((i2 + 1))
+		done
+		got=$(tmux capture-pane -pt S 2>/dev/null | grep -o 'SPIN=[a-z]*' | head -1)
+		tmux kill-session -t S 2>/dev/null
+		[ "$got" = "SPIN=$want" ] ||
+			fail "$opt did not hand TERAT_SPIN=$want to the shell it starts: [$got]"
+	done
+fi
+note="$note+options"
+
+# `terat` with no question is a shell, and it must start on a machine where no
+# agent is installed yet: that shell is where the agent gets installed. The
+# prerequisite check used to run first and refuse, so the first run on a fresh
+# machine printed "pi is not installed" instead of a prompt. The stand-in shell
+# proves it was reached by saying so.
+if command -v tmux >/dev/null 2>&1; then
+	printf '#!/bin/sh\nprintf "BARE_SHELL_REACHED\\n"\n' >"$D/bareshell"
+	chmod +x "$D/bareshell"
+	tmux kill-session -t B 2>/dev/null
+	# No TERAT_CMD and no agent on this PATH, so anything but the shell path
+	# fails; `sleep` keeps the pane alive long enough to read.
+	tmux new-session -d -s B -x 100 -y 20 \
+		"env -u TERAT_CMD TERAT_SHELL_BIN='$D/bareshell' XDG_CONFIG_HOME='$D/bareh' \
+		 PATH='/usr/bin:/bin' sh '$D/terat'; sleep 5"
+	i3=0
+	while [ $i3 -lt 15 ]; do
+		sleep 1
+		tmux capture-pane -pt B 2>/dev/null | grep -q 'BARE_SHELL_REACHED' && break
+		i3=$((i3 + 1))
+	done
+	got=$(tmux capture-pane -pt B 2>/dev/null | grep -c 'BARE_SHELL_REACHED')
+	tmux kill-session -t B 2>/dev/null
+	[ "$got" -gt 0 ] ||
+		fail "terat did not start a shell before an agent was installed"
+fi
+note="$note+bare-shell"
+
 # An agent terat has never heard of must still receive the settings. Before this,
 # an unknown name fell out of the config switch with nothing at all and no way to
 # tell, so a contributor adding an agent got one that ran and ignored every

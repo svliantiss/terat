@@ -61,8 +61,10 @@ ln -sf $PWD/terat ~/.local/bin/terat   # optional: for typing `terat` yourself
 echo "source $PWD/terat.zsh" >> ~/.zshrc   # zsh ask mode
 ```
 
-If the agent is not installed, `terat` says so and exits rather than relaying a
-shell error:
+`terat` with no question is a shell, so it starts one even before an agent is
+installed — that first shell is where you would install it. A question is
+different: without something to ask, it says so rather than relaying a shell
+error:
 
 ```
 🟅 hello
@@ -979,15 +981,33 @@ A spinner turns on the line below the question and vanishes when the answer
 arrives. pi sometimes prints its answer and then lingers instead of exiting,
 so finishing cannot be inferred from the process ending.
 
-To have the spinner sit on the question's line instead of the one below it:
+To have the spinner sit on the question's line instead of the one below it, for
+one run or for every run:
 
 ```
-export TERAT_SPIN=inline
+terat --inline '…'          # this question only
+terat --inline              # this shell, and ask mode inside it
+export TERAT_SPIN=inline    # every shell that inherits it
 ```
 
-It is drawn over the last cell of the question and erased before the answer, so
-the question is never shortened; only the position of the frame changes. The
-default is `below`, and unsetting the variable returns to it.
+The flag wins for the run and is handed to the shell `terat` starts, so starting
+one with `--inline` changes ask mode in it too. `--below` puts it back. It is
+drawn over the last cell of the question and erased before the answer, so the
+question is never shortened; only the position of the frame changes. The default
+is `below`, and unsetting the variable returns to it.
+
+An option terat does not know is refused rather than ignored:
+
+```
+$ terat --inline-spinner 'q'
+terat: no such option: --inline-spinner
+terat: options are --trace, --inline, --below
+terat: put -- before a question that really begins with dashes
+```
+
+This matters because the question is not the only thing on the command line. A
+swallowed option used to become a question in its own right and answer the next
+line, so a typo looked like terat working.
 
 It also cannot be inferred from a pause in the output. `pi` is a coding agent:
 asked to create a file, run a test or search a tree, it goes silent while the

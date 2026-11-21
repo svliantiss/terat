@@ -868,11 +868,38 @@ agent=${TERAT_ACP_AGENT:-$agent}
 # on`, and `off` means do not trace even though a collector exists. A boolean
 # could not tell an explicit off from silence, and off was being ignored.
 trace_want=''
-case ${1:-} in
---trace)
-	trace_want=1
-	shift ;;
-esac
+# Flags are peeled in a loop so `--trace --inline` works in either order.
+# Anything else beginning with `--` is refused: a swallowed option is how
+# `terat --inline` used to answer the wrong line instead of saying it did not
+# know the word.
+while :; do
+	case ${1:-} in
+	--trace)
+		trace_want=1
+		shift ;;
+	# Where the spinner waits, for this run. The variable wins for ask mode,
+	# which passes it down; the flag is for trying it without exporting. It is
+	# exported too, so `terat --inline` with no question hands the choice to the
+	# shell it starts and ask mode in that shell draws inline as well.
+	--inline)
+		spin_style=inline
+		TERAT_SPIN=inline
+		export TERAT_SPIN
+		shift ;;
+	--below)
+		spin_style=below
+		TERAT_SPIN=below
+		export TERAT_SPIN
+		shift ;;
+	--?*)
+		printf 'terat: no such option: %s\n' "$1" >&2
+		printf 'terat: options are --trace, --inline, --below\n' >&2
+		printf 'terat: put -- before a question that really begins with dashes\n' >&2
+		exit 2 ;;
+	*)
+		break ;;
+	esac
+done
 # A trace that is on by default has to be per provider: pointing terat at a
 # different endpoint should not inherit the span collector of the one before it.
 # `terat set trace on|off` stores it; the variable wins when both are present.
@@ -1130,12 +1157,21 @@ if [ -z "${TERAT_CMD:-}" ] && [ -z "$q_in_argv" ]; then
 	esac
 fi
 
+# `terat` with no question is a shell, and a shell does not need an agent to
+# exist. This is decided here rather than at the exec below because the
+# prerequisite check in between would otherwise refuse to start the very shell
+# that installs the agent — the first run on a fresh machine.
+bare_shell=''
+if [ "$#" -eq 0 ] && [ -t 0 ] && [ -t 1 ]; then
+	bare_shell=1
+fi
+
 # The one prerequisite: the agent itself. Said plainly, because the failure it
 # causes is a shell error ("claude: not found") followed by "no answer", which
 # reads like terat is broken rather than missing something to talk to. Only
 # checked when we chose the command: TERAT_CMD is the caller's business, and a
 # path that does not exist yet is a legitimate thing to test.
-if [ -z "${TERAT_CMD:-}" ]; then
+if [ -z "${TERAT_CMD:-}" ] && [ -z "$bare_shell" ]; then
 	bin=$(agent_cmd "$agent" | awk '{print $1}')
 	if ! command -v "$bin" >/dev/null 2>&1; then
 		printf 'terat: %s is not installed, and it is what answers the question\n' "$bin" >&2
@@ -1270,7 +1306,7 @@ rm -f "$tmp.files" "$tmp.uniq"
 # start, which loads terat.zsh and with it the capture. Nothing is wrapped, so
 # this is all of "normal mode". It has to come before the read below, which
 # would otherwise block waiting for a question that is not coming.
-if [ "$#" -eq 0 ] && [ -t 0 ] && [ -t 1 ]; then
+if [ -n "$bare_shell" ]; then
 	exec "${TERAT_SHELL_BIN:-/bin/zsh}" -l
 fi
 
