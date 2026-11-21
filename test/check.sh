@@ -1131,5 +1131,45 @@ if [ -L "$acp_neutral/terat" ]; then
 	note="$note+acp-symlink"
 fi
 
+# An agent that fails must arrive as a JSON-RPC error carrying the agent's own
+# words, not as an assistant message. Merging stderr into the answer made an
+# expired login look like the reply, with `end_turn`, so a client stored it.
+cat >/tmp/acpfail.sh <<'SH'
+#!/bin/sh
+cat >/dev/null
+printf 'AUTH EXPIRED: refresh failed\n' >&2
+exit 3
+SH
+chmod +x /tmp/acpfail.sh
+acp_out=$(printf '%s\n' \
+	'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1}}' \
+	'{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/tmp"}}' \
+	'{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"sess_1","prompt":[{"type":"text","text":"q"}]}}' |
+	TERAT_CMD=/tmp/acpfail.sh XDG_CONFIG_HOME="$D/home" sh "$D/terat" acp 2>&1)
+case $acp_out in
+*'"error"'*'AUTH EXPIRED'*) ;;
+*) fail "acp turned a failed agent into an answer: $acp_out" ;;
+esac
+case $acp_out in
+*'"stopReason"'*) fail "acp gave a failed turn a stop reason: $acp_out" ;;
+esac
+note="$note+acp-fail"
+
+# A healthy agent that also writes to stderr must still have only its stdout
+# treated as the answer, or the diagnostic gets stored as the reply.
+acp_out=$(printf '%s\n' \
+	'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1}}' \
+	'{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/tmp"}}' \
+	'{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"sess_1","prompt":[{"type":"text","text":"q"}]}}' |
+	TERAT_CMD=/tmp/acpnoisy.sh XDG_CONFIG_HOME="$D/home" sh "$D/terat" acp 2>&1)
+case $acp_out in
+*'"text":"CLEAN_ANSWER"'*) ;;
+*) fail "acp lost a healthy agent's answer: $acp_out" ;;
+esac
+case $acp_out in
+*'NOISE_ON_STDERR'*) fail "acp let stderr into the answer: $acp_out" ;;
+esac
+note="$note+acp-stderr"
+
 echo "  note=$note"
 echo RESULT=PASS

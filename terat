@@ -666,6 +666,7 @@ if [ "${1:-}" = acp ]; then
 			# a per-invocation override rather than `terat set model`, so a client
 			# switching models cannot rewrite the saved default of whoever ran it.
 			acp_outf=$acp_tmp/ans.$$
+			acp_errf=$acp_tmp/err.$$
 			acp_pidf=$acp_tmp/pid.$$
 			(
 				cd "$acp_where" 2>/dev/null || cd .
@@ -674,11 +675,15 @@ if [ "${1:-}" = acp ]; then
 				# take the question in argv, and break every agent that reads it
 				# from stdin - which is five of the six.
 				if [ -n "$acp_mdl" ]; then
-					printf '%s\n' "$acp_q" | TERAT_ACP_MODEL=$acp_mdl "$acp_self" 2>&1
+					printf '%s\n' "$acp_q" | TERAT_ACP_MODEL=$acp_mdl "$acp_self"
 				else
-					printf '%s\n' "$acp_q" | "$acp_self" 2>&1
+					printf '%s\n' "$acp_q" | "$acp_self"
 				fi
-			) >"$acp_outf" 2>&1 &
+				# Two files, not one: with `2>&1` the diagnostic a failing
+				# agent writes to stderr arrived at the client as the assistant's
+				# answer, with a happy stop reason, so an auth expiry was stored
+				# as the reply. Only stdout is the answer.
+			) >"$acp_outf" 2>"$acp_errf" &
 			acp_child=$!
 			printf '%s' "$acp_child" >"$acp_pidf"
 
@@ -727,7 +732,8 @@ if [ "${1:-}" = acp ]; then
 			wait "$acp_child" 2>/dev/null
 			acp_rc=$?
 			acp_ans=$(cat "$acp_outf" 2>/dev/null)
-			rm -f "$acp_outf" "$acp_pidf"
+			acp_said=$(cat "$acp_errf" 2>/dev/null)
+			rm -f "$acp_outf" "$acp_errf" "$acp_pidf"
 			if [ -n "$acp_cancelled" ]; then
 				# `cancelled` is the spec's word for a turn the client stopped. It
 				# is a success result, not an error: the turn ended the way it was
@@ -735,10 +741,18 @@ if [ "${1:-}" = acp ]; then
 				acp_reply "$acp_id" '{"stopReason":"cancelled"}'
 				continue
 			fi
-			if [ "$acp_rc" -ne 0 ] && [ -z "$acp_ans" ]; then
-				# A failed run must not read as an empty answer with a happy stop
-				# reason: a client would store the blank reply as the result.
-				acp_error "$acp_id" -32000 "the agent failed (exit $acp_rc)"
+			# Any failure is an error, including one that printed something on
+			# the way out: a partial line plus `end_turn` is worse than an error,
+			# because the client keeps it as the answer.
+			if [ "$acp_rc" -ne 0 ]; then
+				# The agent's own words name the cause - an expired login, a
+				# missing key - so they go to the client rather than being
+				# swallowed into a generic message.
+				if [ -n "$acp_said" ]; then
+					acp_error "$acp_id" -32000 "$(printf '%s' "$acp_said" | head -3 | tr '\n' ' ')"
+				else
+					acp_error "$acp_id" -32000 "the agent failed (exit $acp_rc)"
+				fi
 				continue
 			fi
 			printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"%s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"%s"}}}}\n' "$acp_sid" "$(acp_esc "$acp_ans")"

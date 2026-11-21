@@ -806,6 +806,28 @@ replay would promise a store that does not exist.
 passed to the nested run as `TERAT_ACP_MODEL`, so a GUI switching models cannot
 rewrite the saved default of whoever started it.
 
+The agent a session uses is the one in the saved config (`terat set agent`); a
+client cannot choose it, because ACP has no field for "which harness" and
+inventing one would not travel. One `terat acp` is one agent, and a client that
+wants another runs another process.
+
+All six agents answer through the bridge, but only where the agent itself is
+configured to run at all — the bridge inherits every one of their failures rather
+than hiding them:
+
+| Agent | Through the bridge | Note |
+| --- | --- | --- |
+| `pi` | answers | the default |
+| `opencode` | answers | its banner comes through on stdout |
+| `claude` | when logged in | an expired OAuth session arrives as an error, with claude's own words |
+| `codex` | needs `ROUTER_KEY` | fails identically outside terat |
+| `grok` | needs `GROK_API_KEY` | same |
+| `dsh` | needs `ROUTER_KEY` | same |
+
+That table is the argument for the error code above: three of those six fail for
+reasons that have nothing to do with this bridge, and a client sees the real
+reason instead of a blank answer with a happy stop reason.
+
 Three things it deliberately does not do yet, so nobody is surprised:
 
 - **Sessions are in-memory.** A client restart gets a new `sess_N`; there is no
@@ -847,6 +869,14 @@ recording, because none of them were guessable:
 | unknown `configId`, unoffered value → `-32602` | accepted both |
 | integer *and* string ids echoed with type | a string id came back **unquoted**, so the reply was not JSON |
 | cancel mid-turn → `stopReason: cancelled` | answered `end_turn`, because the turn was synchronous |
+
+A fourth bug was found by driving a *failing* agent through it: an agent that
+wrote a diagnostic to stderr had that text delivered to the client as the
+assistant's answer with `end_turn`, so an expired login was stored as the reply.
+The turn had merged stderr into stdout, both in the nested call and in the
+capture. Now stdout alone is the answer and any non-zero exit is a JSON-RPC error
+carrying the agent's first lines, because "AUTH EXPIRED" is the only useful thing
+in that situation and a generic "the agent failed" would hide it.
 
 A third bug was found by trying to use it rather than by testing it: `terat acp`
 worked when run from the checkout and failed from `PATH` with "cannot find
