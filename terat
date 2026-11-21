@@ -1052,6 +1052,18 @@ if [ -n "$cfg_url$cfg_key$cfg_model" ]; then
 		DSH_HOME=$ddir
 		export DSH_HOME
 		terat_generated=$ddir ;;
+	*)
+		# An agent terat has never heard of. It used to fall through with no
+		# configuration at all and no way to tell, so a contributor who added
+		# `agent_cmd` and `agent_name` got an agent that ran and silently ignored
+		# every setting. The four common spellings are set instead: a harness
+		# that reads any of them is configured, and one that reads none is
+		# unaffected rather than broken.
+		[ -n "$cfg_url" ] && { TERAT_URL=$cfg_url; export TERAT_URL; }
+		[ -n "$cfg_key" ] && { TERAT_KEY=$cfg_key; export TERAT_KEY; }
+		[ -n "$cfg_url" ] && { OPENAI_BASE_URL=$cfg_url; export OPENAI_BASE_URL; }
+		[ -n "$cfg_key" ] && { OPENAI_API_KEY=$cfg_key; export OPENAI_API_KEY; }
+		[ -n "$cfg_model" ] && { TERAT_MODEL=$cfg_model; export TERAT_MODEL; } ;;
 	esac
 fi
 

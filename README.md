@@ -766,6 +766,38 @@ filesystem, set `TERAT_CONFIG` to a writable path, or run `terat set` once at bu
 time and bake the file in — there is no separate environment interface for url,
 key and model, so a "just export it" recipe does not exist.
 
+## Adding an agent
+
+Adding a seventh agent is three edits and no ACP work, because the bridge asks
+`terat` rather than knowing any harness itself:
+
+```sh
+# 1. the list
+agents='pi claude codex opencode grok dsh newthing'
+
+# 2. how to ask it a question on stdin, and what to call it
+newthing) echo 'newthing --prompt {}' ;;   # `{}` only if it refuses stdin
+
+# 3. its display name
+newthing) echo Newthing ;;
+```
+
+That is the whole contract. The bridge reads `$agents`, so a new name shows up in
+`terat acp`'s `configOptions` and can be selected per session immediately — no
+protocol code, no change to `terat-acp.awk`, nothing to teach ACP.
+
+Two things to know before sending the PR:
+
+- **Settings reach an unknown agent through four generic variables**
+  (`TERAT_URL`, `TERAT_KEY`, `TERAT_MODEL`, and `OPENAI_BASE_URL`/`OPENAI_API_KEY`).
+  Without that fallback a contributed agent ran and silently ignored every
+  setting, which is the worst way to be configured. A harness that reads its own
+  config file instead is unaffected; the named branches above exist for the ones
+  that need a generated file in their own format.
+- **`TERAT_CMD` is not a substitute.** It bypasses the agent table and the config
+  switch entirely, so it is the right tool for testing a command and the wrong one
+  for adding an agent.
+
 ## ACP: another program asks, instead of you
 
 Everything above is one person typing. `terat acp` is the same engine with the

@@ -1264,5 +1264,56 @@ case $acp_out in
 esac
 note="$note+env-config"
 
+# An agent terat has never heard of must still receive the settings. Before this,
+# an unknown name fell out of the config switch with nothing at all and no way to
+# tell, so a contributor adding an agent got one that ran and ignored every
+# setting. This is the contract an outside contributor relies on.
+# The agent has to be a real entry in the table, because TERAT_CMD bypasses the
+# agent config switch entirely - using it here would test the escape hatch and
+# never reach the fallback. A copy of terat with one extra agent is the honest
+# fixture: it is exactly what a contributor's pull request looks like.
+cat >/tmp/acpunknown.sh <<'SH'
+#!/bin/sh
+cat >/dev/null
+printf 'URL=%s MODEL=%s KEY=%s\n' "${TERAT_URL:-none}" "${TERAT_MODEL:-none}" "$([ -n "${TERAT_KEY:-}" ] && echo set || echo none)"
+SH
+chmod +x /tmp/acpunknown.sh
+mkdir -p "$D/newagent"
+# The three edits a contributor makes, written as awk rather than sed because a
+# substitution carrying a newline is not portable sed at all.
+awk '
+	/^agents=/ { sub(/dsh.$/, "dsh contributed\047"); print; next }
+	/^agent_cmd\(\)/ { in_cmd = 1 }
+	/^agent_name\(\)/ { in_cmd = 0; in_name = 1 }
+	in_cmd && /dsh\) echo/ && !done_cmd {
+		print; print "\tcontributed) echo \047/tmp/acpunknown.sh\047 ;;"; done_cmd = 1; next
+	}
+	in_name && /dsh\) echo/ && !done_name {
+		print; print "\tcontributed) echo contributed ;;"; done_name = 1; next
+	}
+	{ print }
+' "$D/terat" >"$D/newagent/terat"
+sh -n "$D/newagent/terat" || fail "the contributed-agent fixture does not parse"
+grep -q "contributed) echo" "$D/newagent/terat" ||
+	fail "the contributed-agent fixture was not built"
+printf 'url=http://unknown-host:9/v1\nkey=UNKNOWNKEY\nmodel=unknown/model\n' >"$D/newagent.cfg"
+acp_out=$(printf 'q\n' |
+	XDG_CONFIG_HOME="$D/nowhere2" TERAT_CONFIG="$D/newagent.cfg" \
+	TERAT_THREAD="$D/unknownthread" \
+	sh "$D/newagent/terat" contributed -- 2>&1)
+case $acp_out in
+*'URL=http://unknown-host:9/v1'*) ;;
+*) fail "an unknown agent got no endpoint: $acp_out" ;;
+esac
+case $acp_out in
+*'MODEL=unknown/model'*) ;;
+*) fail "an unknown agent got no model: $acp_out" ;;
+esac
+case $acp_out in
+*'KEY=set'*) ;;
+*) fail "an unknown agent got no key: $acp_out" ;;
+esac
+note="$note+unknown-agent"
+
 echo "  note=$note"
 echo RESULT=PASS
