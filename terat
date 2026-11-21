@@ -505,11 +505,33 @@ if [ "${1:-}" = acp ]; then
 	# however the bridge ends.
 	acp_tmp=$(mktemp -d "${TMPDIR:-/tmp}/terat-acp.XXXXXX" 2>/dev/null) || acp_tmp=${TMPDIR:-/tmp}
 	trap 'rm -rf "$acp_tmp"' EXIT INT TERM
-	# fd 4 is stdin as it was at start: the turn read the transport on 0, so a
-	# cancel has to be read from a duplicate that the turn cannot consume.
+	# One reader owns the transport. A line that arrives while a turn is running
+	# cannot be handed back to the pipe, so the turn's poll saves it here and the
+	# loop drains this before reading again. Without that, a client that
+	# pipelines the next request while an answer is still coming lost it - and
+	# the loss was silent, which is the worst kind: the client waits for a reply
+	# to a request the bridge never saw.
+	#
+	# fd 4 is the transport too (dup of 0, same offset). The turn reads it while
+	# the main loop is not reading, so exactly one of them is ever active; having
+	# a separate descriptor is what lets the reader be killed without disturbing
+	# the descriptor the loop will read next.
 	exec 4<&0
+	: >"$acp_tmp/pending"
+	acp_next() {
+		acp_got=''
+		if [ -s "$acp_tmp/pending" ]; then
+			acp_line=$(awk 'NR == 1' "$acp_tmp/pending")
+			awk 'NR > 1' "$acp_tmp/pending" >"$acp_tmp/pending.new" 2>/dev/null &&
+				mv "$acp_tmp/pending.new" "$acp_tmp/pending"
+			acp_got=1
+		elif IFS= read -r acp_line; then
+			acp_got=1
+		fi
+		[ -n "$acp_got" ]
+	}
 
-	while IFS= read -r acp_line; do
+	while acp_next; do
 		case $acp_line in
 		*[![:space:]]*) ;;
 		*) continue ;; # a blank line carries nothing
@@ -734,7 +756,7 @@ if [ "${1:-}" = acp ]; then
 				# does not have at all and older bash only takes in whole
 				# seconds. A ready file says the reader got a line.
 				rm -f "$acp_tmp/line.$$"
-				( IFS= read -r acp_l <&4 2>/dev/null && printf '%s' "$acp_l" >"$acp_tmp/line.$$" ) &
+				( IFS= read -r acp_l <&4 2>/dev/null && printf '%s\n' "$acp_l" >"$acp_tmp/line.$$" ) &
 				acp_rdr=$!
 				# Wait for the reader, the child, or a second of silence.
 				acp_w=0
@@ -761,7 +783,11 @@ if [ "${1:-}" = acp ]; then
 						done
 						kill -9 "$acp_child" 2>/dev/null
 						break ;;
-					*) : ;; # something else arrived mid-turn; ignore it
+					*)
+						# Not a cancel, so it is the client's next request
+						# already on the wire. Keep it for the loop rather
+						# than dropping it on the floor.
+						printf '%s\n' "$acp_more" >>"$acp_tmp/pending" ;;
 					esac
 				fi
 			done

@@ -1209,6 +1209,32 @@ case $acp_out in
 esac
 note="$note+acp-agent"
 
+# A client may put its next request on the wire while a turn is still running.
+# The turn's poll reads the transport to catch a cancel, so a line it is not
+# interested in has to be kept for the loop: dropping it lost the request
+# silently, and the client waited forever for a reply nothing would send.
+cat >/tmp/acpcount.sh <<'SH'
+#!/bin/sh
+cat >/dev/null
+printf 'one answer\n'
+SH
+chmod +x /tmp/acpcount.sh
+acp_out=$(printf '%s\n' \
+	'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1}}' \
+	'{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/tmp"}}' \
+	'{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"sess_1","prompt":[{"type":"text","text":"a"}]}}' \
+	'{"jsonrpc":"2.0","id":4,"method":"session/prompt","params":{"sessionId":"sess_1","prompt":[{"type":"text","text":"b"}]}}' \
+	'{"jsonrpc":"2.0","id":5,"method":"session/prompt","params":{"sessionId":"sess_1","prompt":[{"type":"text","text":"c"}]}}' |
+	TERAT_CMD=/tmp/acpcount.sh XDG_CONFIG_HOME="$D/home" sh "$D/terat" acp 2>&1)
+acp_n=0
+for acp_id in 3 4 5; do
+	case $acp_out in
+	*"\"id\":$acp_id,\"result\":{\"stopReason\""*) acp_n=$((acp_n + 1)) ;;
+	esac
+done
+[ "$acp_n" -eq 3 ] || fail "acp answered only $acp_n of 3 pipelined requests"
+note="$note+acp-pipeline"
+
 # A machine with nowhere to write a settings file must still be configurable.
 # This is what makes `docker run -e` work on a fresh image with no writable home.
 cat >/tmp/acpcfgpeek.sh <<'SH'

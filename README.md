@@ -888,6 +888,15 @@ recording, because none of them were guessable:
 | integer *and* string ids echoed with type | a string id came back **unquoted**, so the reply was not JSON |
 | cancel mid-turn → `stopReason: cancelled` | answered `end_turn`, because the turn was synchronous |
 
+A fifth was the worst of them, and only showed up when two prompts were put on
+the wire at once. The cancel poll reads the transport to catch a stop, and a line
+it was not interested in was thrown away — so a client that sent its next request
+while an answer was still coming had that request silently dropped, and waited
+for a reply to something the bridge never saw. It now goes into a queue the main
+loop drains first. Cancel had to keep working after that fix, which it did not on
+the first attempt: removing the reader's own descriptor broke it, and the claim
+that cancels a 20s turn caught it in four seconds.
+
 A fourth bug was found by driving a *failing* agent through it: an agent that
 wrote a diagnostic to stderr had that text delivered to the client as the
 assistant's answer with `end_turn`, so an expired login was stored as the reply.
