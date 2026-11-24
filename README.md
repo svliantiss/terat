@@ -965,7 +965,7 @@ background and a portable poll — `read -t` is not in dash at all and only take
 whole seconds in older bash, so the reader runs as its own process writing to a
 file.
 
-The bridge is about 435 lines in `terat`'s `acp)` branch — one `case` arm per
+The bridge is about 436 lines in `terat`'s `acp)` branch — one `case` arm per
 method — plus about 105 in `terat-acp.awk`, which does the only three things `sh`
 cannot: read a field from a request, join the text of a prompt's content blocks,
 and escape a string so it can sit inside JSON. No SDK, no Node, no jq: a machine
@@ -981,27 +981,15 @@ A spinner turns on the line below the question and vanishes when the answer
 arrives. pi sometimes prints its answer and then lingers instead of exiting,
 so finishing cannot be inferred from the process ending.
 
-To have the spinner sit on the question's line instead of the one below it, for
-one run or for every run:
-
-```
-terat --inline '…'          # this question only
-terat --inline              # this shell, and ask mode inside it
-export TERAT_SPIN=inline    # every shell that inherits it
-```
-
-The flag wins for the run and is handed to the shell `terat` starts, so starting
-one with `--inline` changes ask mode in it too. `--below` puts it back. It is
-drawn over the last cell of the question and erased before the answer, so the
-question is never shortened; only the position of the frame changes. The default
-is `below`, and unsetting the variable returns to it.
+The frame is drawn on its own line and erased before the answer, so it never
+touches the question. It waits for the run to finish rather than for a pause.
 
 An option terat does not know is refused rather than ignored:
 
 ```
-$ terat --inline-spinner 'q'
-terat: no such option: --inline-spinner
-terat: options are --trace, --inline, --below
+$ terat --trace-spin 'q'
+terat: no such option: --trace-spin
+terat: there is one option: --trace
 terat: put -- before a question that really begins with dashes
 ```
 
@@ -1071,7 +1059,6 @@ question is unaffected.
 | `TERAT_AGENT` | `pi` | which agent answers; set by `terat set agent` or `terat <name>` |
 | `TERAT_NAME` | the agent's name | label printed before an answer on a terminal |
 | `TERAT_CONFIG` | `~/.config/terat/settings` | where `terat set` keeps url, key and model |
-| `TERAT_SPIN` | `below` | `inline` puts the spinner on the question's line; `below` gives it its own |
 | `TERAT_SYMBOL` | `🟅` | the glyph shown in ask mode |
 | `TERAT_GLYPH` | `❯` | the prompt character it stands in for |
 | `TERAT_OTLP` | unset | OTLP/HTTP JSON endpoint; unset means no tracing |

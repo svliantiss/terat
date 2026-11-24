@@ -230,4 +230,4 @@ uvx --from git+https://github.com/agentclientprotocol/acp-tck@v0.5.0 \
 sh test/check.sh
 ```
 
-`terat` is 1842 lines, `terat-acp.awk` 106. The bridge is 435 of those 1842.
+`terat` is 1772 lines, `terat-acp.awk` 106. The bridge is 436 of those 1772.

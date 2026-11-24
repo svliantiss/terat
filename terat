@@ -30,9 +30,6 @@ thread=${TERAT_THREAD:-${HOME:-.}/.terat/thread.$PPID}
 # gap measured during a long generation and far below anything a person would
 # wait on a dead run.
 max=${TERAT_MAX:-180}
-# Where the spinner is drawn while waiting: `below` (the default) gives it its
-# own line under the question, `inline` puts it on the question's line.
-spin_style=${TERAT_SPIN:-below}
 # TMPDIR is not to be trusted: it can name a directory that does not exist, or
 # one that cannot be written. Picking a temp dir that cannot hold a file used to
 # fail on the first `>` with "Permission denied" and no answer at all, so test
@@ -324,78 +321,6 @@ attach)
 		# Passes the file through its own viewer, which renders images.
 		grok) printf '%s\tyes\tviewer\n' "$a" ;;
 		*) printf '%s\t?\tunknown\n' "$a" ;;
-		esac
-	done
-	exit 0 ;;
-config)
-	if [ -f "$terat_cfg" ]; then
-		sed 's/^key=.*/key=(set)/' "$terat_cfg"
-	else
-		printf 'terat: no settings yet; %s does not exist\n' "$terat_cfg"
-	fi
-	exit 0 ;;
-agents)
-	printf '%s\n' $agents
-	exit 0 ;;
-models)
-	# `shift` first: inside this branch $1 is the word `models`, so a filter
-	# read from $1 would always be the literal "models" and match nothing.
-	shift
-	# What the endpoint serves, so a model can be named rather than guessed.
-	# Reads the router's own list, which needs no key — so this works before
-	# `terat set key` and cannot leak what it does not have. One id per line,
-	# with `vision` first when the server says the model takes images: that
-	# distinction changes the answer, and is the reason terat writes `input`
-	# into the configs it generates.
-	url=$(cfg_get url)
-	[ -n "$url" ] || { printf 'terat: no endpoint yet; terat set url <url>\n' >&2; exit 2; }
-	json=$(curl -s -m 20 "$url/models" 2>/dev/null) ||
-		wget -q -T 20 -O - "$url/models" 2>/dev/null || {
-		printf 'terat: could not read %s/models\n' "${url%/}" >&2
-		exit 1
-	}
-	[ -n "$json" ] || { printf 'terat: %s/models returned nothing\n' "${url%/}" >&2; exit 1; }
-	printf '%s' "$json" | tr -d '\n\r' | awk -v filter="${1:-}" '
-	{
-		s = $0
-		while ((i = index(s, "\"id\":")) > 0) {
-			s = substr(s, i + 5)
-			sub(/^[ \t]*"/, "", s)
-			n = index(s, "\"")
-			if (n == 0) break
-			id = substr(s, 1, n - 1)
-			s = substr(s, n + 1)
-			# The record ends where the next one begins; splitting there keeps
-			# a nested object from being read as part of this model.
-			j = index(s, "\"id\":")
-			body = (j > 0) ? substr(s, 1, j - 1) : s
-			s = (j > 0) ? substr(s, j) : ""
-			if (id == "") continue
-			if (filter != "" && index(id, filter) == 0) continue
-			printf "%s%s\n", ((body ~ /"image"/) ? "vision\t" : "text\t"), id
-		}
-	}'
-	exit 0 ;;
-# Which agent can pass an image through, as measured rather than assumed. The
-# capability is a property of the pair, not of either half: a vision model behind
-# an agent that reads files as bytes answers about the bytes, and an agent that
-# can attach will not help a text-only model. Asking for the matrix is cheaper
-# than discovering it one failed screenshot at a time.
-attach)
-	# Reads the file as the agent's own tool would, then reports whether the
-	# bytes reached a model at all.
-	printf 'agent\timage\n'
-	for a in $agents; do
-		case $a in
-		# Both bundle the same library and honour `input` for a model entry, so
-		# they attach an image when the model declares it can take one.
-		pi | opencode | dsh) printf '%s\tconfig\n' "$a" ;;
-		# claude and codex hand the file to the model directly and are not
-		# gated on a capability field; measured reading a known image.
-		claude | codex) printf '%s\tyes\n' "$a" ;;
-		# No image path: a PNG arrives as IDAT bytes and the model answers
-		# about those. Verified by asking it to open one.
-		*) printf '%s\tno\n' "$a" ;;
 		esac
 	done
 	exit 0 ;;
@@ -868,32 +793,17 @@ agent=${TERAT_ACP_AGENT:-$agent}
 # on`, and `off` means do not trace even though a collector exists. A boolean
 # could not tell an explicit off from silence, and off was being ignored.
 trace_want=''
-# Flags are peeled in a loop so `--trace --inline` works in either order.
-# Anything else beginning with `--` is refused: a swallowed option is how
-# `terat --inline` used to answer the wrong line instead of saying it did not
-# know the word.
+# Anything beginning with `--` that is not `--trace` is refused. A swallowed
+# option used to be read as the question and answer the wrong line, so a typo
+# looked like terat working.
 while :; do
 	case ${1:-} in
 	--trace)
 		trace_want=1
 		shift ;;
-	# Where the spinner waits, for this run. The variable wins for ask mode,
-	# which passes it down; the flag is for trying it without exporting. It is
-	# exported too, so `terat --inline` with no question hands the choice to the
-	# shell it starts and ask mode in that shell draws inline as well.
-	--inline)
-		spin_style=inline
-		TERAT_SPIN=inline
-		export TERAT_SPIN
-		shift ;;
-	--below)
-		spin_style=below
-		TERAT_SPIN=below
-		export TERAT_SPIN
-		shift ;;
 	--?*)
 		printf 'terat: no such option: %s\n' "$1" >&2
-		printf 'terat: options are --trace, --inline, --below\n' >&2
+		printf 'terat: there is one option: --trace\n' >&2
 		printf 'terat: put -- before a question that really begins with dashes\n' >&2
 		exit 2 ;;
 	*)
@@ -1357,19 +1267,11 @@ give_up() {
 	exit "${1:-1}"
 }
 
-# Clear the spinner and give the cursor back. Below, the whole line is ours, so
-# `\r`+erase is right. Inline, the question is on that line and the cursor is on
-# the frame itself, so erasing to the end of the line removes the frame and
-# nothing else; a `\b` there would step back onto the question's last character.
-# Then end the line, so the answer starts below the question rather than on it.
+# Clear the spinner and give the cursor back. The spinner has the line to
+# itself, so `\r`+erase clears exactly it.
 wipe() {
 	[ -t 1 ] || return 0
-	if [ "$spin_style" = inline ]; then
-		printf '\033[K\n'
-	else
-		printf '\r\033[K'
-	fi
-	printf '\033[?25h'
+	printf '\r\033[K\033[?25h'
 }
 
 bye() {
@@ -1397,14 +1299,7 @@ spin() {
 		for f in $frames; do
 			sleep 0.1 2>/dev/null || sleep 1
 			kill -0 "$pid" 2>/dev/null || return 0
-			# One cell either way. Inline prints the frame then steps back onto
-			# it, so the next frame overwrites it and the question stays put;
-			# starting with a `\b` would eat the question's last character.
-			if [ "$spin_style" = inline ]; then
-				[ -t 1 ] && printf '%s\b' "$f"
-			else
-				[ -t 1 ] && printf '\r%s ' "$f"
-			fi
+			[ -t 1 ] && printf '\r%s ' "$f"
 			# A run that ends without the marker (an error, an older pi)
 			# must still stop, so fall back to the old quiet rule only once
 			# the answer has gone quiet for a long time.
@@ -1852,10 +1747,9 @@ if [ -t 1 ]; then
 	# is an error rather than a no-op.
 	case $cols in ''|*[!0-9]*) cols=80 ;; esac
 	[ "$cols" -ge 20 ] || cols=80
-	# Below, the spinner sat on its own line and wipe cleared it, so the answer
-	# needs a break to start under it. Inline, wipe already ended the question's
-	# line; a second break here would leave a blank line between the two.
-	[ "$spin_style" = inline ] || printf '\n'
+	# The spinner sat on its own line and wipe cleared it, so the answer needs a
+	# break to start under it.
+	printf '\n'
 	# The label is part of the first line, so folding it with the answer keeps
 	# that line from running one label too wide. Stop a column short: a line
 	# that fills the last column leaves the terminal holding a pending wrap,

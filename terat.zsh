@@ -294,14 +294,7 @@ _terat_line() {
 	local ptxt=$(_terat_prompt_text)
 	print -n "\033[1A\r\033[K"
 	print -rnP -- "${ptxt#$'\n'}"
-	# TERAT_SPIN=inline draws the spinner behind the question instead of on the
-	# line below, so terat needs this line left open to draw on. It ends the line
-	# itself when it is done.
-	if [[ $2 == inline ]]; then
-		print -rn -- "$1"
-	else
-		print -r -- "$1"
-	fi
+	print -r -- "$1"
 }
 
 # --- Enter, in ask mode -----------------------------------------------------
@@ -475,13 +468,12 @@ _terat_named() {
 # prompt itself when the widget returns: a reset-prompt here would eat the
 # answer line.
 _terat_ask() {
-	local style=${TERAT_SPIN:-below}
-	_terat_line "$1" "$style"
+	_terat_line "$1"
 	_terat_words "$1"
 	# terat sits next to this file, so sourcing it is enough: no PATH change.
 	# `--` first: everything after it is the question, so one that begins with
 	# an agent name ("claude wrote this") is not taken as `terat claude`.
-	TERAT_SPIN=$style command ${_terat_ask_bin:-terat} -- "${_terat_out[@]}"
+	command ${_terat_ask_bin:-terat} -- "${_terat_out[@]}"
 	local rc=$?
 	# Ctrl-C while the answer is still arriving leaves the mode here rather
 	# than trusting the trap, which can run after zle has redrawn the prompt.

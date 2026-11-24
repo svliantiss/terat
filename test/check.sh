@@ -780,30 +780,22 @@ SH
 	note="$note+capture+stable"
 fi
 
-# 14. TERAT_SPIN=inline draws the spinner on the question's line, not below it.
-#     Two things must hold and both have been wrong here: the frame must not
-#     overwrite the question (a leading \b erased its last character), and it
-#     must not leave a blank line before the answer (wipe ends the line, so the
-#     answer's own leading newline has to be skipped). A pty is used because
-#     the spinner only draws on a terminal.
+# 14. The spinner waits on its own line, below the question. A pty is needed
+#     because it only draws on a terminal, and a tiny screen model is used rather
+#     than the raw bytes because the failure worth catching is cursor movement
+#     landing on the wrong row, which leaves the byte stream looking correct.
 cat > /tmp/spinpty.py <<'PY'
-# terat never prints the question: _terat_line does, so stand in for it. That is
-# the only way to see whether the frame lands on the question's line or the next.
-# A tiny screen model is used rather than the raw bytes because the failure that
-# mattered here was cursor movement overwriting a character, which leaves the
-# byte stream looking correct.
 import os, pty, fcntl, termios, struct, select, sys, re
 
-spin, terat = sys.argv[1], sys.argv[2]
+terat = sys.argv[1]
 q = "a question long enough to reach the right hand side of the terminal"
 
 pid, fd = pty.fork()
 if pid == 0:
     os.environ.update({"TERM": "xterm-256color", "TERAT_CMD": "/tmp/spinanswer.sh"})
-    if spin != "-":
-        os.environ["TERAT_SPIN"] = spin
-    # inline leaves the question's line open for the frame; below ends it first
-    sys.stdout.write(q if spin == "inline" else q + "\n")
+    # terat never prints the question in this path: ask mode does, so stand in
+    # for it and end the line the way ask mode does.
+    sys.stdout.write(q + "\n")
     sys.stdout.flush()
     os.execv("/bin/sh", ["sh", terat, q])
 fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 60, 0, 0))
@@ -823,9 +815,7 @@ while True:
         break
 os.kill(pid, 9)
 
-# escapes first, so the model only ever sees characters the eye would
 text = re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", buf.decode("utf-8", "replace"))
-# screen model: \n newline, \r column 0, \b back one, printable overwrites
 rows, col = [[""]], 0
 for ch in text:
     if ch == "\n":
@@ -842,34 +832,11 @@ for ch in text:
         col += 1
 rows = ["".join(r) for r in rows]
 
-raw = text
-
-if spin == "inline":
-    # the question must survive the frame: the bug was a \b that stepped back
-    # onto its last character and erased it
-    line = [r for r in rows if "a question long enough" in r]
-    if not line:
-        sys.exit("question line vanished: %r" % rows[:3])
-    # the frame occupies the cell after the text; what must not happen is the
-    # text itself being shortened, which is what a leading \b used to do
-    if "terminal" not in line[0]:
-        sys.exit("the spinner ate the end of the question: %r" % line[0][-30:])
-    # the frame is rewritten in place, which is what keeps it on that line
-    head = raw.split("\n")[0]
-    if "\b" not in head:
-        sys.exit("inline frames were not drawn in place: %r" % head[-40:])
-    # and the answer starts on the next line, with no blank line between
-    idx = [i for i, r in enumerate(rows) if "a question long enough" in r][0]
-    nxt = rows[idx + 1] if idx + 1 < len(rows) else ""
-    if nxt.strip() == "":
-        sys.exit("inline left a blank line before the answer: %r" % rows[:4])
-else:
-    # below: the frame goes on the line after the question
-    idx = [i for i, r in enumerate(rows) if "a question long enough" in r]
-    if not idx:
-        sys.exit("question line vanished: %r" % rows[:3])
-    if not idx[0] + 1 < len(rows) or not rows[idx[0] + 1].strip():
-        sys.exit("default spinner is not on its own line: %r" % rows[:4])
+idx = [i for i, r in enumerate(rows) if "a question long enough" in r]
+if not idx:
+    sys.exit("question line vanished: %r" % rows[:3])
+if not idx[0] + 1 < len(rows) or not rows[idx[0] + 1].strip():
+    sys.exit("the spinner is not on its own line: %r" % rows[:4])
 print("OK")
 PY
 cat > /tmp/spinanswer.sh <<'SH'
@@ -880,10 +847,8 @@ printf 'the answer\n'
 SH
 chmod +x /tmp/spinanswer.sh
 if command -v python3 >/dev/null 2>&1; then
-	verdict=$(cd /tmp && python3 /tmp/spinpty.py inline ~/Projects/terat/terat 2>&1)
-	[ "$verdict" = OK ] || fail "inline spinner: $verdict"
-	verdict=$(cd /tmp && python3 /tmp/spinpty.py - ~/Projects/terat/terat 2>&1)
-	[ "$verdict" = OK ] || fail "default spinner: $verdict"
+	verdict=$(cd /tmp && python3 /tmp/spinpty.py ~/Projects/terat/terat 2>&1)
+	[ "$verdict" = OK ] || fail "spinner is not below the question: $verdict"
 	note="$note+spin"
 fi
 
@@ -1293,10 +1258,10 @@ case $acp_out in
 esac
 note="$note+env-config"
 
-# An option terat does not know must be refused, not swallowed. `terat --inline`
-# used to be read as a question with the flag dropped, so a mistyped option
-# silently answered whatever line came next instead of saying it did not know the
-# word. Exit 2 and a message, with the accepted options named.
+# An option terat does not know must be refused, not swallowed. A dropped option
+# used to be read as the question, so a mistyped flag silently answered whatever
+# line came next instead of saying it did not know the word. Exit 2 and a
+# message, with the accepted option named.
 printf '#!/bin/sh\ncat >/dev/null\nprintf "OPTION_OK\\n"\n' >"$D/optstub.sh"
 chmod +x "$D/optstub.sh"
 if printf 'q\n' | TERAT_CMD="$D/optstub.sh" XDG_CONFIG_HOME="$D/opth" \
@@ -1306,43 +1271,22 @@ fi
 printf 'q\n' | TERAT_CMD="$D/optstub.sh" XDG_CONFIG_HOME="$D/opth" \
 	sh "$D/terat" --no-such-option 2>&1 | grep -q 'no such option' ||
 	fail "an unknown option was not named in the error"
-# And the real ones still reach the answer.
-for opt in --inline --below --trace; do
+# And the real one still reaches the answer.
+for opt in --trace; do
 	out=$(printf 'q\n' | TERAT_CMD="$D/optstub.sh" XDG_CONFIG_HOME="$D/opth" \
 		TERAT_THREAD="$D/optthread" sh "$D/terat" "$opt" -- 'q' 2>&1)
 	[ "$out" = OPTION_OK ] || fail "$opt is a real option but gave [$out]"
 done
-# `--inline` must be inherited by the shell `terat --inline` starts, because
-# inline only means anything in ask mode: run on its own, the engine has already
-# had its line ended by the shell and draws the same either way. The shell is a
-# stand-in that reports what it was given. This needs a tty: without a question
-# and with both ends a terminal is the only case that starts a shell at all, so a
-# piped run would test nothing.
-if command -v tmux >/dev/null 2>&1; then
-	printf '#!/bin/sh\nprintf "SPIN=%%s\\n" "${TERAT_SPIN:-}"\n' >"$D/fakeshell"
-	chmod +x "$D/fakeshell"
-	for pair in '--inline:inline' '--below:below'; do
-		opt=${pair%%:*}
-		want=${pair##*:}
-		tmux kill-session -t S 2>/dev/null
-		# `sleep` holds the pane open after the stand-in shell exits: when the
-		# session's only command finishes, tmux destroys the pane and the capture
-		# is empty, which read as "the flag did not arrive".
-		tmux new-session -d -s S -x 100 -y 20 \
-			"env TERAT_SHELL_BIN='$D/fakeshell' XDG_CONFIG_HOME='$D/opth' sh '$D/terat' $opt; sleep 5"
-		i2=0
-		while [ $i2 -lt 15 ]; do
-			sleep 1
-			tmux capture-pane -pt S 2>/dev/null | grep -q 'SPIN=' && break
-			i2=$((i2 + 1))
-		done
-		got=$(tmux capture-pane -pt S 2>/dev/null | grep -o 'SPIN=[a-z]*' | head -1)
-		tmux kill-session -t S 2>/dev/null
-		[ "$got" = "SPIN=$want" ] ||
-			fail "$opt did not hand TERAT_SPIN=$want to the shell it starts: [$got]"
-	done
-fi
 note="$note+options"
+
+# Each top-level command must appear once. A `case` takes the first matching arm,
+# so a second copy of one is unreachable — and it drifted: the duplicate `attach`
+# still said grok had no image path while the live one had been measured. Nothing
+# failed, because dead code cannot be wrong out loud.
+for cmd in set config agents models attach; do
+	n=$(grep -c "^$cmd)" "$D/terat")
+	[ "$n" -eq 1 ] || fail "the \`$cmd\` command appears $n times; a duplicate arm can never run"
+done
 
 # `terat` with no question is a shell, and it must start on a machine where no
 # agent is installed yet: that shell is where the agent gets installed. The
