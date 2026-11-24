@@ -77,7 +77,7 @@ A shell script and an awk script. No node, no python, no jq, no SDK.
 ```dockerfile
 FROM alpine:3.20
 RUN apk add --no-cache gawk coreutils curl
-COPY terat terat-acp.awk terat-trace.awk /usr/local/bin/
+COPY terat terat-trace.awk /usr/local/bin/
 ```
 
 ```sh
@@ -286,10 +286,9 @@ the code is wrong** — see [the rule](CONTRIBUTING.md#the-rule).
 
 | File | Job |
 | --- | --- |
-| `terat` | asks the chosen agent one question, prints the answer, remembers it |
+| `terat` | the whole thing: asks, prints, remembers, and speaks ACP |
 | `terat.zsh` | the ask mode: glyph, Enter, `!`, Ctrl-C, plugins off |
-| `terat-acp.awk` | the three JSON jobs the ACP bridge needs |
-| `terat-trace.awk` | builds the OTLP spans from the agent's event stream |
+| `terat-trace.awk` | optional: builds OTLP spans; without it, tracing says so |
 | `terat.lua` | optional: the same thing under a Rex shortcut |
 
 ## Details

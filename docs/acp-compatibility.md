@@ -230,4 +230,5 @@ uvx --from git+https://github.com/agentclientprotocol/acp-tck@v0.5.0 \
 sh test/check.sh
 ```
 
-`terat` is 1636 lines, `terat-acp.awk` 106. The bridge is 407 of those 1636.
+`terat` is one file. The bridge is about 407 lines of it, and its JSON helper is
+embedded rather than shipped beside it.

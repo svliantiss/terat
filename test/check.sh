@@ -1098,9 +1098,8 @@ fi
 # and the bridge used to work only when run from the checkout and fail from
 # PATH - which is where a client runs it.
 #
-# Run from a neutral directory on purpose. The fallback `./terat-acp.awk` means a
-# cwd holding the helper hides the bug entirely, which is how the first version
-# of this claim passed against the broken build.
+# Run from a neutral directory on purpose: a cwd holding a stray helper used to
+# hide whether the install was complete.
 acp_neutral=$D/neutral
 mkdir -p "$acp_neutral"
 ln -sf "$D/terat" "$acp_neutral/terat" 2>/dev/null
@@ -1309,6 +1308,19 @@ acpv=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"p
 	awk 'match($0, /"version":"[^"]*"/) { print substr($0, RSTART + 11, RLENGTH - 12); exit }')
 [ -n "$acpv" ] && [ "terat $acpv" = "$ver" ] ||
 	fail "acp agentInfo.version [$acpv] does not match --version [$ver]"
+# A single copied file is a complete install: no helper beside it, and ACP still
+# answers. This is the promise the README makes, so it is asserted on the copy.
+single=$D/singlecopy
+mkdir -p "$single"
+cp "$D/terat" "$single/terat" 2>/dev/null
+single_out=$(cd /tmp && printf '%s\n' \
+	'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1}}' |
+	TERAT_CMD=/bin/cat sh "$single/terat" acp 2>&1)
+case $single_out in
+*'"agentInfo"'*) ;;
+*) fail "a copied terat alone could not answer acp: [$single_out]" ;;
+esac
+note="$note+single-file"
 note="$note+version"
 note="$note+options"
 
