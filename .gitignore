@@ -15,6 +15,7 @@ test/.build.log
 # *.local.md note cannot be swept in by `git add -A` either.
 RELEASE.local.md
 *.local.md
+terat-fast.local
 
 # Local reference copy of the Agent Client Protocol docs. Fetched, not authored:
 # a tracked copy would rot and bloat the repo. Regenerate with the curl loop below.
@@ -23,3 +24,8 @@ acp-docs.local/
 # Cloned upstream sources for reading, not vendored. Same reasoning as
 # acp-docs.local/: other people's code, fetched for reference.
 refs.local/
+
+# The pre-ask-mode prototype and the notes that came with it: it names this
+# machine's private router and records an old credential incident. History, not
+# content, so it stays on the machine that has it.
+archive/

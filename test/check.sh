@@ -34,9 +34,21 @@ printf '# TERAT-TEST-HOME\n' >>~/.zshrc
 # machine `~/.local/bin/pi` can be a symlink to a managed install, and a `>`
 # through it overwrites the agent instead of testing ours. That is not
 # hypothetical — it happened, and had to be restored by hand.
+# The checkout is wherever this script is: a container keeps it at /src, but a
+# clone is anywhere, so the directory above test/ is the source. Resolved before
+# HOME changes so a clone runs where it stands.
+case $0 in
+*/*) src=$(cd "${0%/*}/.." && pwd) ;;
+*) src=$(pwd) ;;
+esac
+[ -f "$src/terat" ] || fail "cannot find terat beside $src"
 D=$HOME/Projects/terat
 mkdir -p "$D"
-cp -R /src/. "$D/" 2>/dev/null || fail "copy source"
+# Tracked files only: a working checkout may hold gitignored reference clones
+# that are large and read-only, and copying those breaks a second run.
+(cd "$src" && git ls-files -z 2>/dev/null | xargs -0 cp --parents -t "$D" 2>/dev/null) ||
+	cp -R "$src"/. "$D/" 2>/dev/null ||
+	fail "copy source"
 chmod +x "$D/terat"
 
 # 1. parses under this distro's sh, zsh and awk
