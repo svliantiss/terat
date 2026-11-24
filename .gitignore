@@ -29,3 +29,8 @@ refs.local/
 # machine's private router and records an old credential incident. History, not
 # content, so it stays on the machine that has it.
 archive/
+
+# Harness checks that name this machine's router: kept out of the repo so the
+# public test suite runs on stubs alone.
+test/harnesses.sh
+test/real-pi.md

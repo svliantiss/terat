@@ -1,12 +1,12 @@
 # Next steps
 
 Written after measuring, not guessing. Every gap below was reproduced on this
-machine, and the two container results were produced in real Alpine and Debian
-images rather than reasoned about.
+machine, and the container results came from real Alpine and Debian images rather
+than being reasoned about.
 
-The short version: **the protocol work is done. What is left is the part that
-makes a stranger able to use it** — an install that survives being copied, a
-licence, and telling the truth about the one shape limit.
+The short version: **the protocol work is done and the packaging is nearly done.**
+What is left is one real install problem, one shape limit worth knowing, and
+polish.
 
 ---
 
@@ -14,7 +14,7 @@ licence, and telling the truth about the one shape limit.
 
 | Claim | Evidence |
 | --- | --- |
-| ACP conformance | **66 passed, 1 failed** (advisory MCP), 83 skipped by capability |
+| ACP conformance | **66 passed, 1 failed** (`ACP-SESSION-004`, the advisory MCP test), 83 skipped by capability |
 | Same result inside a container | **66/1 in `python:3.14-slim`, `/bin/sh` = dash** |
 | Full turn in bare Alpine/busybox | `end_turn` with `IN_CONTAINER_OK` |
 | No interpreter | `sh` + `awk`. Verified under busybox and dash |
@@ -22,82 +22,68 @@ licence, and telling the truth about the one shape limit.
 | No `HOME` at all | answers |
 | Per-session agent switch | `pi` then `opencode`, one process, both `end_turn` |
 | Adding an agent | 3 edits, zero ACP code |
-| Suite | green twice, 20 claim groups, each falsified first |
-
-That is a working product. The rest is packaging.
+| Suite runs where it stands | `TERAT_TEST_HOME=/tmp/x sh test/check.sh` from a fresh clone |
+| Licence and contributing | `LICENSE` (MIT), `CONTRIBUTING.md` |
 
 ---
 
-## P0 — things that break a stranger today
+## P0 — the one thing that still breaks a stranger
 
-### 1. Copying `terat` alone breaks ACP
+### Copying `terat` alone breaks ACP
 
-Measured:
+Measured, from an unrelated working directory:
 
 ```
-$ cp terat ~/.local/bin/ && terat acp
+$ cp terat ~/.local/bin/ && cd /tmp && terat acp
 terat: cannot find terat-acp.awk beside ~/.local/bin/terat
 terat: acp needs it; it ships next to terat
 ```
 
-The README's install step symlinks only `terat`. That works **by accident**,
-because the symlink resolves back into the checkout. A real install — copying
-files out, or `curl | tar` — has no `terat-acp.awk` and ACP is dead.
+The README's install step symlinks into the checkout, so it works there — the
+symlink resolves back to the real directory and the awk is beside it. A real
+install — copying files out, or `curl | tar` into `/usr/local/bin` — has no
+`terat-acp.awk`, and ACP is dead.
+
+`terat` also looks for `./terat-acp.awk` in the current directory, so it can
+appear to work if you happen to run it from the repo. That is not a fix; it is a
+second way to be confused.
 
 **Two acceptable fixes:**
 
-- **(a) Embed the awk in the script.** The whole helper is 106 lines. Appending
-  it as a heredoc, writing it to `$TMPDIR` at first use, makes `terat` a genuine
-  single file — which is the "just add this package" goal in its strongest form.
-  Cost: ~110 lines, one `mktemp`, and the awk is no longer editable on its own.
-- **(b) Ship and document them as a set.** Honest and cheaper, but "one file" is
-  a nicer promise than "four files".
+- **(a) Embed the awk in the script.** The helper is 106 lines. Appending it as a
+  heredoc and writing it to `$TMPDIR` at first use makes `terat` a genuine single
+  file — the "just add this package" goal in its strongest form. Cost: ~110 lines,
+  one `mktemp`, and the awk stops being editable on its own.
+- **(b) Ship and document them as a set.** Honest and cheaper, but "one file" is a
+  better promise than "four files".
 
-Preference: **(a)**, because it turns three runtime dependencies into one and it
-is the difference between "copy this file" and "read the install section".
+Preference: **(a)**. It turns three runtime dependencies into one and is the
+difference between "copy this file" and "read the install section".
 
-Also needed: `terat-trace.awk` and `terat-trace.js` are optional, but
-`terat-trace.awk` failing silently means traces quietly stop. Either embed or
-make the absence loud.
-
-### 2. No `LICENSE`
-
-There is no licence file. For an OSS project this is not a formality: **without a
-licence nobody may legally use it.** Every other question about adoption is moot
-until this exists. Pick one (MIT or Apache-2.0 both fit a shell tool) and add it.
-
-### 3. `CONTRIBUTING.md` does not exist
-
-The knowledge is in `README.md` and in the test fixture I wrote, but a
-contributor looks for a named file. It should say, in this order:
-
-- the contract: anything that reads a question on stdin and writes an answer on
-  stdout is a harness
-- the 3-edit recipe for a new agent
-- run `sh test/check.sh`, and that every claim must fail when the code is broken
-  (this is the rule that has caught the most bugs here)
-- ACP is not the thing to change when adding an agent
+`terat-trace.awk` and `terat-trace.js` are optional, but a missing
+`terat-trace.awk` means traces quietly stop. Either embed it or make the absence
+loud.
 
 ---
 
-## P1 — the one shape limit to fix or document loudly
+## P1 — the one shape limit to document loudly
 
 ### Turns are serial
 
 Measured: two 4-second turns in two sessions took **9 seconds**.
 
-This is the honest limit and it is already in
-[`docs/acp-compatibility.md`](acp-compatibility.md). Two options:
+This is the honest limit and it is in [`acp-compatibility.md`](acp-compatibility.md).
+Two options:
 
 - **Document and move on.** Say "one process per concurrent user" in the README
-  install section, not just the compatibility doc. A dev running a shared server
-  will otherwise discover it in production.
+  install section, not only in the compatibility doc. A dev running a shared
+  server will otherwise discover it in production.
 - **Make turns concurrent.** Each turn already runs in a background subshell, so
   the work is a job table: session → pid, an output file per turn, and a loop that
-  can resume. This is a genuine architectural change to the one piece that is
-  currently simple, and it should only be done if someone actually needs it.
+  can resume. A genuine architectural change to the one piece that is currently
+  simple, and only worth doing if someone actually needs it.
 
-Preference: **document now**, build the job table only when a real user asks. The
+Preference: **document now**, build the job table when a real user asks. The
 bridge's simplicity is an asset that concurrency would spend.
 
 ---
@@ -108,25 +94,20 @@ bridge's simplicity is an asset that concurrency would spend.
 | --- | --- |
 | `--version` / `agentInfo.version` is hardcoded `"1"` | a client cannot report which terat it is talking to, and bug reports cannot be tied to a release |
 | `CHANGELOG.md` | the commit log is good; a stranger will not read it |
-| `test/check.sh` needs `/src` rewritten to run on a host | the suite is the best documentation here and currently needs a sed to use. It should discover its own directory |
-| batch JSON-RPC arrays | served first element only. Documented; either unpack or say so in the ACP doc (it currently is) |
-| MCP | the 1 failing advisory test. Out of scope until someone needs it — an ACP client that expects MCP will find the agent's own config applies |
+| batch JSON-RPC arrays | served first element only. Documented; either unpack or say so (it currently does) |
+| MCP | the 1 failing advisory test. Out of scope until someone needs it — an ACP client expecting MCP will find the agent's own config applies |
 
 ---
 
 ## The order I would do it
 
-1. **`LICENSE`** — one file, unblocks everything legal.
-2. **Embed `terat-acp.awk`** — makes the one-file promise true, and directly
-   serves the "fresh install, just add this package" goal.
-3. **`CONTRIBUTING.md`** — turns the fixture in `test/check.sh` into an
-   invitation.
-4. **`--version`, and make the suite run where it stands.**
-5. Concurrency **only** on evidence.
+1. **Embed `terat-acp.awk`** — makes the one-file promise true and directly serves
+   the "fresh install, just add this package" goal.
+2. **`--version`**, so a bug report can name a release.
+3. Concurrency **only** on evidence.
 
-Steps 1–4 are packaging, not engineering. Nothing in the protocol needs to
-change, which is the actual good news: the hard part is done and the remaining
-work carries no risk to it.
+Nothing in the protocol needs to change, which is the good news: the hard part is
+done and the remaining work carries no risk to it.
 
 ---
 
@@ -138,5 +119,5 @@ work carries no risk to it.
   different product.
 - **Not** add a session store. terat's thread is the scrollback; `session/load`
   would mean inventing history that the terminal already has.
-- **Not** reach for a runtime. The no-interpreter property is the reason it runs
-  in bare Alpine, and that is worth more than any convenience a dependency buys.
+- **Not** reach for a runtime. The no-interpreter property is why it runs in bare
+  Alpine, and that is worth more than any convenience a dependency buys.

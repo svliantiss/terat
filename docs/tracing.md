@@ -74,10 +74,10 @@ call, so a run that created a file and then listed it shows both:
 
 ```
 terat.ask                                  13.4s
-├── chat some/model-…        6.7s    1036 in / 117 out
+├── chat some/model        6.7s    1036 in / 117 out
 ├── tool write                               3ms
 ├── tool bash                               12ms
-└── chat some/model-…        3.3s     192 in /  31 out
+└── chat some/model        3.3s     192 in /  31 out
 ```
 
 The numbers are not estimates. Every field comes from the same `--mode json`
@@ -96,8 +96,7 @@ tool that actually knows what was billed.
 
 pi can only price a turn if it has a price for the model. `~/.pi/agent/models.json`
 carries a `cost` block per model, and for a subscription or a custom provider it
-is all zeroes — which is what `some/model`
-looks like:
+is all zeroes — which is what a subscription model looks like:
 
 ```json
 "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
@@ -166,7 +165,7 @@ leaves the machine: which tools ran, in what order, from which directory, and
 what was actually asked. Both halves are useful, and by default they share no
 identifier.
 
-A W3C `traceparent` fixes that. router reads `traceparent` and stores its trace
+A W3C `traceparent` fixes that. the router reads `traceparent` and stores its trace
 id as `requests.trace_id`; `terat` also uses that id for the OTLP spans. One
 value then finds the same work in Laminar and in the router:
 
@@ -210,8 +209,8 @@ a trace and you get the span half of the join and not the ledger half.
 For `pi`, the extension registers the header against a provider *name*, and a name
 that does not match the one in `models.json` is not an error: the header simply
 never goes out. terat's generated config calls its provider `terat`; only a
-hand-written router setup uses the other name. That mismatch was silent once and
-is now asserted.
+hand-written router setup uses the other name. A mismatch there is silent, so
+it is asserted.
 
 That indirection for pi is deliberate, and worth keeping even though the other
 agents write the header into a config. pi resolves provider headers strictly: a
@@ -234,7 +233,7 @@ directory that exists only for that run, so nothing there is remembered either.
 
 This is optional in the same sense as `TERAT_OTLP`: nothing is propagated unless
 tracing is on, and tracing without `TERAT_OTLP` is still useful, because the join
-lives in router's own database rather than in a trace backend.
+lives in the router's own database rather than in a trace backend.
 
 ### Which model answers
 
@@ -246,9 +245,9 @@ it by hand:
 ```jsonc
 // ~/.pi/agent/models.json
 "router": {
-  "baseUrl": "https://router.example.com/v1",
+  "baseUrl": "https://router.example/v1",
   "api": "openai-completions",
-  "apiKey": "router_...",
+  "apiKey": "sk-...",
   "models": [{ "id": "some/model" }]
 }
 ```
@@ -262,8 +261,8 @@ it by hand:
 Or let terat write those two files for the run, which is what this does:
 
 ```sh
-terat set url https://router.example.com/v1
-terat set key router_...
+terat set url https://router.example/v1
+terat set key sk-...
 terat set model some/model
 ```
 

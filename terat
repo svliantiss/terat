@@ -298,9 +298,10 @@ if [ "${1:-}" = acp ]; then
 	acp_dir=$(cd "$acp_dir" 2>/dev/null && pwd) || acp_dir=.
 	acp_self=$acp_dir/$(basename "$acp_self")
 	[ -f "$acp_self" ] && [ -r "$acp_self" ] || acp_self=$(command -v terat 2>/dev/null)
+	# Only beside the script: a fallback to the current directory would make a
+	# broken install look like it works whenever it happens to run from a
+	# checkout. Without the helper there is no JSON, so say so.
 	acp_awk=$acp_dir/terat-acp.awk
-	[ -f "$acp_awk" ] || acp_awk=./terat-acp.awk
-	# Without the helper there is no JSON, so say so rather than emit garbage.
 	if [ ! -r "$acp_awk" ]; then
 		printf 'terat: cannot find terat-acp.awk beside %s\n' "$0" >&2
 		printf 'terat: acp needs it; it ships next to terat\n' >&2
@@ -1034,7 +1035,7 @@ if [ -n "$trace_id" ] && [ -z "${TERAT_CMD:-}" ] && [ "$agent" = pi ]; then
 		# name that does not match the one in models.json is not an error: the
 		# header simply never goes out, so the trace posts and the router never
 		# hears of it. terat's own generated config calls its provider `terat`;
-		# only a hand-written router setup uses the other name.
+		# only a hand-written model config uses another name.
 		[ -z "${TERAT_TRACE_PROVIDER:-}" ] && [ -n "$pdir" ] &&
 			{ TERAT_TRACE_PROVIDER=terat; export TERAT_TRACE_PROVIDER; }
 		pi_cmd="$pi_cmd -e $trace_ext"

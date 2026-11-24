@@ -44,11 +44,20 @@ esac
 [ -f "$src/terat" ] || fail "cannot find terat beside $src"
 D=$HOME/Projects/terat
 mkdir -p "$D"
-# Tracked files only: a working checkout may hold gitignored reference clones
-# that are large and read-only, and copying those breaks a second run.
-(cd "$src" && git ls-files -z 2>/dev/null | xargs -0 cp --parents -t "$D" 2>/dev/null) ||
-	cp -R "$src"/. "$D/" 2>/dev/null ||
-	fail "copy source"
+# Tracked files when this is a git checkout, so ignored reference clones stay out;
+# a tarball has no .git, and then the tree is already exactly what ships. `cp -pPR`
+# with a per-file loop because `cp --parents` is GNU-only.
+if [ -d "$src/.git" ]; then
+	(cd "$src" && git ls-files -z 2>/dev/null) | while IFS= read -r -d '' f; do
+		# A root-level path has no `/*`, so `%/*` leaves the name itself: make
+		# the parent only when there is one, or `terat` becomes a directory.
+		case $f in */*) mkdir -p "$D/${f%/*}" 2>/dev/null ;; esac
+		cp -pP "$src/$f" "$D/$f" 2>/dev/null
+	done
+else
+	cp -R "$src"/. "$D/" 2>/dev/null
+fi || fail "copy source"
+[ -f "$D/terat" ] || fail "copy source"
 chmod +x "$D/terat"
 
 # 1. parses under this distro's sh, zsh and awk
@@ -57,7 +66,6 @@ zsh -n ~/Projects/terat/terat.zsh || fail "zsh -n terat.zsh"
 awk -f ~/Projects/terat/terat-trace.awk /dev/null || fail "awk parse"
 
 # A stand-in for pi: this suite is about terat, and no container has credentials.
-# Real pi is covered separately in test/real-pi.md.
 cat > $D/pi <<'SH'
 #!/bin/sh
 cat >/dev/null

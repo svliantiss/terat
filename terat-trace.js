@@ -3,8 +3,8 @@
 // pi does not propagate W3C trace context, so a question, the model calls it
 // causes and the router's own ledger are otherwise three unrelated records.
 // This brings them together: terat mints an id, exports it, and this puts it on
-// the request as `traceparent`, which router (Manifest) reads back out as
-// `requests.trace_id`. One id then finds the work in both places.
+// the request as `traceparent`, which a router that reads W3C context stores
+// as its own trace id. One id then finds the work in both places.
 //
 // Loaded with `pi -e`, which is per run, so it only exists when terat asks for
 // it. With the variables unset it returns immediately and changes nothing:
