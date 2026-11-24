@@ -1297,6 +1297,19 @@ for opt in --trace; do
 		TERAT_THREAD="$D/optthread" sh "$D/terat" "$opt" -- 'q' 2>&1)
 	[ "$out" = OPTION_OK ] || fail "$opt is a real option but gave [$out]"
 done
+# --version names a release, so a bug report ties back to one; and ACP's agentInfo
+# must report the same string rather than a placeholder that never changes.
+ver=$(sh "$D/terat" --version 2>&1)
+case $ver in
+"terat "[0-9]*) ;;
+*) fail "--version gave [$ver]" ;;
+esac
+acpv=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{}}}' |
+	TERAT_CMD=/bin/cat sh "$D/terat" acp 2>&1 |
+	awk 'match($0, /"version":"[^"]*"/) { print substr($0, RSTART + 11, RLENGTH - 12); exit }')
+[ -n "$acpv" ] && [ "terat $acpv" = "$ver" ] ||
+	fail "acp agentInfo.version [$acpv] does not match --version [$ver]"
+note="$note+version"
 note="$note+options"
 
 # Each top-level command must appear once. A `case` takes the first matching arm,

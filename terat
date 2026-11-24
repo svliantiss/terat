@@ -19,6 +19,8 @@
 # share a conversation. HOME may be unset (cron, container), so fall back to the
 # current directory.
 thread=${TERAT_THREAD:-${HOME:-.}/.terat/thread.$PPID}
+# Reported by --version and by ACP's agentInfo, so a bug report can name a release.
+terat_version=1.0.0
 # Seconds of silence with no tool running before the run counts as wedged. Not a
 # cap on how long a question may take.
 max=${TERAT_MAX:-180}
@@ -409,7 +411,7 @@ if [ "${1:-}" = acp ]; then
 			# terat's thread is the terminal scrollback. No MCP capabilities for
 			# the same reason.
 			acp_inited=1
-			acp_reply "$acp_id" '{"protocolVersion":1,"agentCapabilities":{"loadSession":false,"promptCapabilities":{},"sessionCapabilities":{}},"authMethods":[{"id":"terat-config","name":"terat set","description":"Configure the endpoint with terat set url/key."}],"agentInfo":{"name":"terat","title":"terat","version":"1"}}' ;;
+			acp_reply "$acp_id" '{"protocolVersion":1,"agentCapabilities":{"loadSession":false,"promptCapabilities":{},"sessionCapabilities":{}},"authMethods":[{"id":"terat-config","name":"terat set","description":"Configure the endpoint with terat set url/key."}],"agentInfo":{"name":"terat","title":"terat","version":"'"$terat_version"'"}}' ;;
 		session/new)
 			# `cwd` is required: without it the session would work in whatever
 			# directory the bridge started in.
@@ -709,9 +711,12 @@ while :; do
 	--trace)
 		trace_want=1
 		shift ;;
+	--version | -V)
+		printf 'terat %s\n' "$terat_version"
+		exit 0 ;;
 	--?*)
 		printf 'terat: no such option: %s\n' "$1" >&2
-		printf 'terat: there is one option: --trace\n' >&2
+		printf 'terat: the options are --trace, --version\n' >&2
 		printf 'terat: put -- before a question that really begins with dashes\n' >&2
 		exit 2 ;;
 	*)

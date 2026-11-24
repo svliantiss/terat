@@ -223,6 +223,7 @@ width of your terminal before printing.
 ## Endpoint, key, model
 
 ```sh
+terat --version             # the release, for a bug report
 terat set url https://router.example/v1
 terat models                # what it serves, one per line, vision or text
 terat set key sk-...

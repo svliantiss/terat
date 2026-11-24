@@ -24,6 +24,7 @@ polish.
 | Adding an agent | 3 edits, zero ACP code |
 | Suite runs where it stands | `TERAT_TEST_HOME=/tmp/x sh test/check.sh` from a fresh clone |
 | Licence and contributing | `LICENSE` (MIT), `CONTRIBUTING.md` |
+| Version reported | `terat --version` and ACP `agentInfo.version` are the same string, asserted |
 
 ---
 
@@ -92,7 +93,6 @@ bridge's simplicity is an asset that concurrency would spend.
 
 | Item | Why |
 | --- | --- |
-| `--version` / `agentInfo.version` is hardcoded `"1"` | a client cannot report which terat it is talking to, and bug reports cannot be tied to a release |
 | `CHANGELOG.md` | the commit log is good; a stranger will not read it |
 | batch JSON-RPC arrays | served first element only. Documented; either unpack or say so (it currently does) |
 | MCP | the 1 failing advisory test. Out of scope until someone needs it — an ACP client expecting MCP will find the agent's own config applies |
@@ -103,8 +103,7 @@ bridge's simplicity is an asset that concurrency would spend.
 
 1. **Embed `terat-acp.awk`** — makes the one-file promise true and directly serves
    the "fresh install, just add this package" goal.
-2. **`--version`**, so a bug report can name a release.
-3. Concurrency **only** on evidence.
+2. Concurrency **only** on evidence.
 
 Nothing in the protocol needs to change, which is the good news: the hard part is
 done and the remaining work carries no risk to it.
