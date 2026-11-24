@@ -9,13 +9,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 	tmux zsh curl ca-certificates git \
 	&& rm -rf /var/lib/apt/lists/*
 
-RUN useradd -m -s /bin/zsh testuser && mkdir -p /home/dev/.local && chown -R testuser /home/dev
+RUN useradd -m -s /bin/zsh testuser && mkdir -p /home/testuser/.local && chown -R testuser /home/testuser
 USER testuser
-ENV PATH=/home/dev/.local/bin:/usr/local/bin:/usr/bin:/bin
+ENV PATH=/home/testuser/.local/bin:/usr/local/bin:/usr/bin:/bin
 # Six global installs is six chances for the registry to drop a connection, and a
 # build that fails on that looks exactly like a broken Dockerfile. Retry it here
 # rather than in every caller's head.
-RUN npm config set prefix /home/dev/.local \
+RUN npm config set prefix /home/testuser/.local \
 	&& npm config set fetch-retries 5 \
 	&& npm config set fetch-retry-maxtimeout 120000
 RUN npm i -g @earendil-works/pi-coding-agent

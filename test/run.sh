@@ -30,7 +30,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 RUN useradd -m -s /usr/bin/zsh testuser
 USER testuser
-WORKDIR /home/dev
+WORKDIR /home/testuser
 EOF
 }
 
@@ -60,7 +60,7 @@ build_distro() {
 		echo 'RUN command -v tmux >/dev/null || echo NO_TMUX'
 		echo 'RUN (useradd -m -s /usr/bin/zsh testuser || adduser -D -s /usr/bin/zsh testuser) 2>/dev/null || true'
 		echo 'USER testuser'
-		echo 'WORKDIR /home/dev'
+		echo 'WORKDIR /home/testuser'
 	} >"$here/.D.$1"
 	# Keep the log: a silently skipped distro looks like a pass.
 	# shellcheck disable=SC2086
