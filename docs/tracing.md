@@ -37,8 +37,8 @@ value already set in the environment wins, so a one-off `TERAT_OTLP=... terat`
 still overrides the file. Keep `.env` out of git — the repo
 gitignores it.
 
-Self-hosted Laminar here is `https://otlp.example.com/v1/traces`, and its UI lives
-at `https://lm.example.com` behind HTTP basic auth.
+A self-hosted Laminar takes OTLP at `https://otlp.example.com/v1/traces`, and its
+UI is a separate host behind the same auth.
 
 ### When a trace does not arrive
 
