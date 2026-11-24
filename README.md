@@ -64,9 +64,10 @@ on stdin, so an editor can ask the same engine the terminal does:
 terat acp        # JSON-RPC over stdio, for a client
 ```
 
-It passes the official conformance suite at **66 passed, 1 failed** — the failure
-is the advisory MCP test. What it implements, what it refuses and why, and the
-one honest limit (turns are serial) are measured in
+It passes the official conformance suite at **66 passed, 1 failed, 83 skipped**.
+The one failure is `ACP-SESSION-004`: an agent *should* connect to MCP servers the
+client names, and terat has no MCP. What it implements, what it refuses and why,
+and the one honest limit (turns are serial) are measured in
 [`docs/acp-compatibility.md`](docs/acp-compatibility.md).
 
 ## Runs where the others do not
