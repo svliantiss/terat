@@ -257,11 +257,8 @@ _terat_key() {
 	zle reset-prompt
 }
 
-# Tracing toggled per session, because a session is the unit the transcript
-# already uses: a shell that keeps one thread of questions and commands is the
-# thing worth having as one trace. Answering a single question without leaving
-# ask mode is the common case, and exporting a variable to get it loses the
-# mode you were in.
+# Tracing toggled per session: one shell with one thread of questions is the
+# unit worth tracing as one trace.
 _terat_trace() {
 	case ${TERAT_TRACE:-} in
 	1) TERAT_TRACE=; print -r -- 'trace: off' ;;
