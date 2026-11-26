@@ -1,35 +1,16 @@
 #!/bin/sh
 # terat - ask an AI one question and print the answer.
-#
-#   terat "why did that build fail?"
-#   terat @shot.png "what is this?"
-#   printf 'why?\n' | terat
-#
-#   terat claude "why did that build fail?"   ask another agent, once
-#   terat set agent claude                    make it the default
-#   terat set url | key | model               where it points, and with what
-#   terat models [name]                       what the endpoint serves
-#   terat attach                              how each agent takes an image
-#   terat --trace '…'                         send this question as one trace
-#   terat config                              show the settings, key redacted
-#
-# In zsh with terat.zsh loaded, `@` on a line switches the prompt into ask mode.
+#   terat "why did that build fail?"      terat @shot.png "what is this?"
+#   terat claude "why?"                   terat set agent claude
+#   terat acp                             JSON-RPC on stdin, for an editor
+#   terat --version
 
-# One transcript per shell: keyed on the parent pid, so two terminals do not
-# share a conversation. HOME may be unset (cron, container), so fall back to the
-# current directory.
 thread=${TERAT_THREAD:-${HOME:-.}/.terat/thread.$PPID}
-# Reported by --version and by ACP's agentInfo, so a bug report can name a release.
 terat_version=1.0.0
-# Seconds of silence with no tool running before the run counts as wedged. Not a
-# cap on how long a question may take.
 max=${TERAT_MAX:-180}
-# TMPDIR may name a missing or unwritable directory, so test before using it.
 tmp_base=${TMPDIR:-/tmp}
 [ -d "$tmp_base" ] && [ -w "$tmp_base" ] || tmp_base=/tmp
 tmp=$tmp_base/terat.$$
-# Milliseconds, for tracing a run whose stream carries no timestamps. Falls back
-# to whole seconds where `date +%s%N` is unsupported.
 now_ms() {
 	_terat_t=$(date +%s%N 2>/dev/null)
 	case $_terat_t in
@@ -43,19 +24,9 @@ now_ms() {
 started=$(now_ms)
 mkdir -p "${thread%/*}" 2>/dev/null
 
-# All agent differences live in the two tables below and nowhere else. Each agent
-# takes its URL, key and model through a different channel:
-#   claude    ANTHROPIC_BASE_URL, ANTHROPIC_API_KEY
-#   grok      GROK_BASE_URL, GROK_API_KEY, GROK_MODEL
-#   opencode  OPENCODE_CONFIG_DIR -> opencode.json
-#   codex     -c key=value overrides
-#   pi        PI_CODING_AGENT_DIR -> models.json, settings.json
-#   dsh       DSH_HOME -> profiles/headless/cordis.patch.yml
 terat_cfg=${TERAT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/terat/settings}
 agents='pi claude codex opencode grok dsh'
 
-# Collector settings from a .env beside this file. Parsed, never sourced, and only
-# the two collector keys are read.
 terat_self=$0
 case $terat_self in
 */*) terat_dir=${terat_self%/*} ;;
@@ -67,7 +38,6 @@ if [ -r "$terat_dir/.env" ] && [ -z "${TERAT_OTLP:-}" ]; then
 		TERAT_OTLP | TERAT_OTLP_KEY) ;;
 		*) continue ;;
 		esac
-		# A hand-quoted or CRLF-edited value still has to be usable.
 		env_v=${env_v%\"}
 		env_v=${env_v#\"}
 		env_v=${env_v%\'}
@@ -78,8 +48,6 @@ if [ -r "$terat_dir/.env" ] && [ -z "${TERAT_OTLP:-}" ]; then
 	unset env_k env_v
 fi
 
-# One row per agent: how to ask it a question on stdin, and what to call it over
-# the answer. `{}` marks where the question goes for the two that refuse stdin.
 agent_cmd() {
 	case $1 in
 	pi) echo 'pi -p --mode json' ;;
@@ -104,10 +72,8 @@ agent_name() {
 	esac
 }
 
-# A name that names an agent, rather than a question about one.
 is_agent() { agent_cmd "$1" >/dev/null 2>&1; }
 
-# Read one key. Last line wins.
 cfg_get() {
 	[ -f "$terat_cfg" ] || return 0
 	awk -v k="$1" '
@@ -116,12 +82,8 @@ cfg_get() {
 	' "$terat_cfg"
 }
 
-# Write one key, replacing any previous line for it. Written through a temp file
-# and renamed, so an interrupted write cannot leave a half-written config.
 cfg_set() {
 	mkdir -p "${terat_cfg%/*}" 2>/dev/null
-	# An absent file is fed as /dev/null: awk exits 2 on a file it cannot open
-	# and never reaches END, which is where the new line is written.
 	if [ -f "$terat_cfg" ]; then
 		cfg_in=$terat_cfg
 	else
@@ -137,8 +99,6 @@ cfg_set() {
 	return 0
 }
 
-# Subcommands. None of them reads stdin or talks to an agent, so they are safe in
-# a script.
 case ${1:-} in
 set)
 	shift
@@ -158,8 +118,6 @@ set)
 			exit 2
 		fi
 		cfg_set agent "$val" || exit 1
-		# Report whether it is installed, but do not fail: installing it is the
-		# next step.
 		bin=$(agent_cmd "$val" | awk '{print $1}')
 		if command -v "$bin" >/dev/null 2>&1; then
 			printf 'agent=%s\n' "$val"
@@ -169,14 +127,12 @@ set)
 		exit 0 ;;
 	url | key | model | trace)
 		if [ -z "$val" ]; then
-			# The key is never echoed; only whether one is set.
 			case $key in
 			key)
 				if [ -n "$(cfg_get key)" ]; then printf 'key=(set)\n'
 				else printf 'key=(unset)\n'
 				fi ;;
 			trace)
-				# An unset trace is reported as off, because that is what it does.
 				printf 'trace=%s\n' "$(cfg_get trace | sed 's/^$//')" |
 					sed 's/^trace=$/trace=off/'
 				;;
@@ -184,8 +140,6 @@ set)
 			esac
 			exit 0
 		fi
-		# Only on or off: any other word would be stored and then read as neither,
-		# silently turning tracing off.
 		if [ "$key" = trace ]; then
 			case $val in
 			on | off) ;;
@@ -222,10 +176,7 @@ agents)
 	printf '%s\n' $agents
 	exit 0 ;;
 models)
-	# $1 is the word `models` itself, so shift before reading a filter from it.
 	shift
-	# The endpoint's own model list, which needs no key. One id per line, marked
-	# `vision` when the model declares it takes images.
 	url=$(cfg_get url)
 	[ -n "$url" ] || { printf 'terat: no endpoint yet; terat set url <url>\n' >&2; exit 2; }
 	json=$(curl -s -m 20 "$url/models" 2>/dev/null) ||
@@ -244,8 +195,6 @@ models)
 			if (n == 0) break
 			id = substr(s, 1, n - 1)
 			s = substr(s, n + 1)
-			# The record ends where the next one begins; splitting there keeps
-			# a nested object from being read as part of this model.
 			j = index(s, "\"id\":")
 			body = (j > 0) ? substr(s, 1, j - 1) : s
 			s = (j > 0) ? substr(s, j) : ""
@@ -255,17 +204,12 @@ models)
 		}
 	}'
 	exit 0 ;;
-# How each agent passes an image through. Whether one can reach the model is a
-# property of the pair, so this names the mechanism rather than a plain yes.
 attach)
 	printf 'agent\timage\thow\n'
 	for a in $agents; do
 		case $a in
-		# Reads the path with its own tool; gated on the model declaring `input`.
 		pi | opencode | dsh) printf '%s\tyes\tmodel input\n' "$a" ;;
-		# Attaches the file directly, with no capability field involved.
 		claude | codex) printf '%s\tyes\tdirect\n' "$a" ;;
-		# Renders it through its own viewer.
 		grok) printf '%s\tyes\tviewer\n' "$a" ;;
 		*) printf '%s\t?\tunknown\n' "$a" ;;
 		esac
@@ -273,18 +217,10 @@ attach)
 	exit 0 ;;
 esac
 
-# ACP: the same engine, addressed by a client instead of a prompt. A client sends
-# JSON-RPC on stdin, so this reads that instead of a question, and every turn is
-# answered by this script in a subshell. Runs before the agent is resolved and
-# before stdin is read, because stdin here is the transport.
 if [ "${1:-}" = acp ]; then
 	shift
-	# Locate this script and its awk helper. dir_of is defined further down, so
-	# the directory is resolved here. A symlink is followed first: $0 is then the
-	# link, and the directory beside it holds no helper.
 	acp_self=$0
 	[ -L "$acp_self" ] && acp_self=$(readlink "$acp_self" 2>/dev/null && [ -n "$acp_self" ] || echo "$0")
-	# A relative link target is relative to the link's own directory.
 	case $acp_self in
 	/*) ;;
 	*/*)
@@ -300,13 +236,8 @@ if [ "${1:-}" = acp ]; then
 	acp_dir=$(cd "$acp_dir" 2>/dev/null && pwd) || acp_dir=.
 	acp_self=$acp_dir/$(basename "$acp_self")
 	[ -f "$acp_self" ] && [ -r "$acp_self" ] || acp_self=$(command -v terat 2>/dev/null)
-	# Scratch directory for this run's files, removed on exit. Created before the
-	# helper below is written, since it holds it.
 	acp_tmp=$(mktemp -d "${TMPDIR:-/tmp}/terat-acp.XXXXXX" 2>/dev/null) || acp_tmp=${TMPDIR:-/tmp}
 	trap 'rm -rf "$acp_tmp"' EXIT INT TERM
-	# The JSON helper ships inside this file, so copying `terat` anywhere is a
-	# complete install. Written once per run rather than passed as an argument:
-	# the program holds parens, and `$(...)` around it would not parse.
 	acp_awk=$acp_tmp/acp.awk
 	acp_program() {
 		cat <<'__TERAT_ACP_AWK__'
@@ -421,8 +352,6 @@ __TERAT_ACP_AWK__
 	}
 	acp_program >"$acp_awk"
 
-	# Typed at a prompt this is a question about acp; serving a terminal as
-	# JSON-RPC would eat keystrokes and answer nothing.
 	if [ -t 0 ]; then
 		printf 'terat: acp speaks JSON-RPC on stdin, so it is for a client, not a prompt\n' >&2
 		printf 'terat: to ask about acp: terat "what is acp"\n' >&2
@@ -430,16 +359,12 @@ __TERAT_ACP_AWK__
 	fi
 
 	acp_n=0
-	# One JSON string, escaped: a question holds newlines and quotes.
 	acp_esc() {
 		printf '%s' "$1" | awk -v mode=esc -f "$acp_awk"
 	}
-	# One field of a request, as bare text.
 	acp_get() {
 		printf '%s' "$2" | awk -v mode=get -v k="$1" -f "$acp_awk"
 	}
-	# The id with its JSON type intact: a string id goes back quoted, a numeric
-	# one bare.
 	acp_get_id() {
 		printf '%s' "$1" | awk -v mode=id -f "$acp_awk"
 	}
@@ -450,19 +375,13 @@ __TERAT_ACP_AWK__
 		printf '{"jsonrpc":"2.0","id":%s,"error":{"code":%s,"message":"%s"}}\n' \
 			"$1" "$2" "$(acp_esc "$3")"
 	}
-	# -32002 Resource not found, with the id in `data` so a client can tell which
-	# of its sessions is stale.
 	acp_no_session() {
 		printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32002,"message":"unknown session","data":{"sessionId":"%s"}}}\n' \
 			"$1" "$(acp_esc "$2")"
 	}
-	# A session holds its directory, model, agent and the values it was offered.
-	# A switch in one session must not leak into another.
 	acp_var() {
 		eval "printf '%s' \"\${acp_$1_$2:-}\""
 	}
-	# Whether an id names a session this bridge opened. Checked against the list,
-	# so an id never used does not read as known.
 	acp_known() {
 		case " $acp_sessions " in
 		*" $1 "*) [ -n "$1" ] ;;
@@ -471,13 +390,6 @@ __TERAT_ACP_AWK__
 	}
 	acp_sessions=''
 	acp_inited=''
-	# Scratch directory for a turn's output, removed on exit.
-	# One reader owns the transport. A line that arrives mid-turn cannot be put
-	# back on the pipe, so the turn's poll queues it here and the loop drains the
-	# queue before reading again.
-	#
-	# fd 4 is a dup of stdin, so a reader can be killed without disturbing the
-	# descriptor the loop reads next.
 	exec 4<&0
 	: >"$acp_tmp/pending"
 	acp_next() {
@@ -500,9 +412,6 @@ __TERAT_ACP_AWK__
 		esac
 		acp_id=$(acp_get_id "$acp_line")
 		acp_method=$(acp_get method "$acp_line")
-		# Everything except `initialize` needs it first: a client that opens a
-		# session before saying hello has not agreed a protocol version, and the
-		# spec calls that an invalid request rather than something to serve.
 		if [ -z "$acp_inited" ] && [ "$acp_method" != initialize ]; then
 			if [ -n "$acp_method" ]; then
 				acp_error "${acp_id:-null}" -32600 'initialize must come first'
@@ -513,18 +422,11 @@ __TERAT_ACP_AWK__
 		fi
 		case $acp_method in
 		'')
-			# Not a request: say so rather than dying, so one bad line cannot
-			# end a session.
 			acp_error "${acp_id:-null}" -32700 'not a JSON-RPC request' ;;
 		initialize)
-			# Version 1. `loadSession` is false because there is no history store:
-			# terat's thread is the terminal scrollback. No MCP capabilities for
-			# the same reason.
 			acp_inited=1
 			acp_reply "$acp_id" '{"protocolVersion":1,"agentCapabilities":{"loadSession":false,"promptCapabilities":{},"sessionCapabilities":{}},"authMethods":[{"id":"terat-config","name":"terat set","description":"Configure the endpoint with terat set url/key."}],"agentInfo":{"name":"terat","title":"terat","version":"'"$terat_version"'"}}' ;;
 		session/new)
-			# `cwd` is required: without it the session would work in whatever
-			# directory the bridge started in.
 			acp_where=$(acp_get cwd "$acp_line")
 			if [ -z "$acp_where" ]; then
 				acp_error "$acp_id" -32602 'session/new needs a cwd'
@@ -535,9 +437,6 @@ __TERAT_ACP_AWK__
 			acp_sessions="$acp_sessions $acp_sid"
 			eval "acp_dir_$acp_sid=\$acp_where"
 			acp_m=$(cfg_get model)
-			# The offered models are the endpoint's own list, the same one
-			# `terat models` shows. Best-effort: with no curl or no endpoint the
-			# session offers only its current model.
 			acp_opts=''
 			acp_vals=''
 			acp_url=$(cfg_get url)
@@ -559,8 +458,6 @@ __TERAT_ACP_AWK__
 					acp_vals="$acp_vals $_am"
 				done
 			fi
-			# An empty value is not a model, so it is never advertised: the
-			# session's own model comes first when the catalog is unavailable.
 			case " $acp_vals " in
 			*" $acp_m "*) ;;
 			*) [ -n "$acp_m" ] && acp_vals="$acp_vals $acp_m" && acp_opts="${acp_opts:+,}{\"value\":\"$(acp_esc "$acp_m")\",\"name\":\"$(acp_esc "$acp_m")\"}" ;;
@@ -568,14 +465,7 @@ __TERAT_ACP_AWK__
 			[ -n "$acp_opts" ] || acp_opts='{"value":"default","name":"default"}'
 			[ -n "$acp_vals" ] || acp_vals=' default'
 			acp_m=${acp_m:-default}
-			# The offered values are kept: a switch to anything else would leave
-			# the session asking a model that does not exist.
 			eval "acp_vals_$acp_sid=\$acp_vals"
-			# The second option names the harness that answers this session. ACP
-			# has no field for "which agent", and inventing a method would not
-			# travel, so it is a config option with a `_` category - the prefix
-			# the spec reserves for extensions. A client that ignores unknown
-			# categories still gets a working session on the saved agent.
 			acp_agent_now=$(acp_var agent "$acp_sid")
 			[ -n "$acp_agent_now" ] || acp_agent_now=$(cfg_get agent)
 			acp_agent_now=${acp_agent_now:-pi}
@@ -588,14 +478,9 @@ __TERAT_ACP_AWK__
 			acp_sid=$(acp_get sessionId "$acp_line")
 			acp_cfg=$(acp_get configId "$acp_line")
 			acp_val=$(acp_get value "$acp_line")
-			# `model` is the only option this bridge advertises, so anything else
-			# is the client's mistake rather than a setting to invent.
 			if ! acp_known "$acp_sid"; then
 				acp_no_session "$acp_id" "$acp_sid"
 			elif [ "$acp_cfg" = _agent ]; then
-				# The agent can be switched mid-session: a client that wants to
-				# compare two harnesses on one question should not have to open a
-				# second process. Only a name the session advertised is taken.
 				case " $agents " in
 				*" $acp_val "*)
 					[ -n "$acp_val" ] || { acp_error "$acp_id" -32602 'no value'; continue; }
@@ -612,9 +497,6 @@ __TERAT_ACP_AWK__
 			elif [ -z "$acp_val" ]; then
 				acp_error "$acp_id" -32602 'no value'
 			else
-				# Only a value the session advertised is accepted: answering a
-				# model switch that cannot be honoured would leave the session
-				# asking something that does not exist, in silence.
 				case " $(acp_var vals "$acp_sid") " in
 				*" $acp_val "*)
 					eval "acp_model_$acp_sid=\$acp_val"
@@ -623,15 +505,11 @@ __TERAT_ACP_AWK__
 				esac
 			fi ;;
 		session/set_mode)
-			# The spec has no model in `set_mode`, but the reference client (0.4.5)
-			# sends one here for setSessionModel, so a modelId is accepted too.
 			acp_sid=$(acp_get sessionId "$acp_line")
 			acp_val=$(acp_get modelId "$acp_line")
 			if ! acp_known "$acp_sid"; then
 				acp_no_session "$acp_id" "$acp_sid"
 			elif [ -z "$acp_val" ]; then
-				# A real mode switch. `ask` is the only mode, so acknowledging
-				# the one we have and refusing the rest is the honest answer.
 				acp_val=$(acp_get modeId "$acp_line")
 				if [ "$acp_val" = ask ]; then
 					acp_reply "$acp_id" '{}'
@@ -656,32 +534,15 @@ __TERAT_ACP_AWK__
 			fi
 			acp_mdl=$(acp_var model "$acp_sid")
 			[ -n "$acp_mdl" ] || acp_mdl=$(cfg_get model)
-			# The agent this session is on. `terat <agent> --` puts the question
-			# on stdin and the name in argv, which is how a client's choice
-			# reaches the same script without a second config file.
 			acp_agn=$(acp_var agent "$acp_sid")
 			[ -n "$acp_agn" ] || acp_agn=$(cfg_get agent)
-			# The turn as the client sees it: the question acknowledged, the
-			# answer, then a stop reason.
 			acp_reply_q=$(acp_esc "$acp_q")
 			printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"%s","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"%s"}}}}\n' "$acp_sid" "$acp_reply_q"
-			# The turn runs in the background so `session/cancel` can reach it
-			# while it is still working. A GUI's stop button is the whole reason
-			# the protocol has a cancel: a bridge that only noticed after the
-			# answer arrived would have nothing to stop.
-			#
-			# Asked of this same script, in the session's directory. The model is
-			# a per-invocation override rather than `terat set model`, so a client
-			# switching models cannot rewrite the saved default of whoever ran it.
 			acp_outf=$acp_tmp/ans.$$
 			acp_errf=$acp_tmp/err.$$
 			acp_pidf=$acp_tmp/pid.$$
 			(
 				cd "$acp_where" 2>/dev/null || cd .
-				# The question is fed on stdin, never the terminal and never the
-				# transport. Closing it instead would work for grok and dsh, which
-				# take the question in argv, and break every agent that reads it
-				# from stdin - which is five of the six.
 				if [ -n "$acp_agn" ] && [ -n "$acp_mdl" ]; then
 					printf '%s\n' "$acp_q" | TERAT_ACP_AGENT=$acp_agn TERAT_ACP_MODEL=$acp_mdl "$acp_self"
 				elif [ -n "$acp_agn" ]; then
@@ -691,28 +552,15 @@ __TERAT_ACP_AWK__
 				else
 					printf '%s\n' "$acp_q" | "$acp_self"
 				fi
-				# Two files, not one: with `2>&1` the diagnostic a failing
-				# agent writes to stderr arrived at the client as the assistant's
-				# answer, with a happy stop reason, so an auth expiry was stored
-				# as the reply. Only stdout is the answer.
 			) >"$acp_outf" 2>"$acp_errf" &
 			acp_child=$!
 			printf '%s' "$acp_child" >"$acp_pidf"
 
-			# We cannot `read` and wait at once, so the wait is a poll. The
-			# child is reaped with `kill -0`, which is portable everywhere.
 			acp_cancelled=''
 			while kill -0 "$acp_child" 2>/dev/null; do
-				# A line that arrives while the turn runs can only be a cancel:
-				# ACP clients do not pipeline requests onto a busy session.
-				#
-				# Read in the background rather than with `read -t`, which dash
-				# does not have at all and older bash only takes in whole
-				# seconds. A ready file says the reader got a line.
 				rm -f "$acp_tmp/line.$$"
 				( IFS= read -r acp_l <&4 2>/dev/null && printf '%s\n' "$acp_l" >"$acp_tmp/line.$$" ) &
 				acp_rdr=$!
-				# Wait for the reader, the child, or a second of silence.
 				acp_w=0
 				while [ "$acp_w" -lt 10 ] && kill -0 "$acp_rdr" 2>/dev/null &&
 					kill -0 "$acp_child" 2>/dev/null; do
@@ -726,19 +574,13 @@ __TERAT_ACP_AWK__
 					rm -f "$acp_tmp/line.$$"
 					case $acp_more in
 					*session/cancel*)
-						# Only this session's cancel stops this turn: a client may
-						# cancel one session while another is running.
 						acp_csid=$(acp_get sessionId "$acp_more")
 						if [ -n "$acp_csid" ] && [ "$acp_csid" != "$acp_sid" ]; then
-							# Another session's cancel: not ours to act on, and
-							# queued so the loop still sees it.
 							printf '%s\n' "$acp_more" >>"$acp_tmp/pending"
 							continue
 						fi
 						acp_cancelled=1
 						kill "$acp_child" 2>/dev/null
-						# Give the agent a moment to persist, then insist:
-						# a stuck model call must not outlive the cancel.
 						acp_w=0
 						while kill -0 "$acp_child" 2>/dev/null && [ "$acp_w" -lt 30 ]; do
 							sleep 0.1 2>/dev/null || sleep 1
@@ -747,9 +589,6 @@ __TERAT_ACP_AWK__
 						kill -9 "$acp_child" 2>/dev/null
 						break ;;
 					*)
-						# Not a cancel, so it is the client's next request
-						# already on the wire. Keep it for the loop rather
-						# than dropping it on the floor.
 						printf '%s\n' "$acp_more" >>"$acp_tmp/pending" ;;
 					esac
 				fi
@@ -760,17 +599,10 @@ __TERAT_ACP_AWK__
 			acp_said=$(cat "$acp_errf" 2>/dev/null)
 			rm -f "$acp_outf" "$acp_errf" "$acp_pidf"
 			if [ -n "$acp_cancelled" ]; then
-				# `cancelled` is a success result: the turn ended as asked.
 				acp_reply "$acp_id" '{"stopReason":"cancelled"}'
 				continue
 			fi
-			# Any failure is an error, including one that printed something on
-			# the way out: a partial line plus `end_turn` is worse than an error,
-			# because the client keeps it as the answer.
 			if [ "$acp_rc" -ne 0 ]; then
-				# The agent's own words name the cause - an expired login, a
-				# missing key - so they go to the client rather than being
-				# swallowed into a generic message.
 				if [ -n "$acp_said" ]; then
 					acp_error "$acp_id" -32000 "$(printf '%s' "$acp_said" | head -3 | tr '\n' ' ')"
 				else
@@ -781,41 +613,20 @@ __TERAT_ACP_AWK__
 			printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"%s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"%s"}}}}\n' "$acp_sid" "$(acp_esc "$acp_ans")"
 			acp_reply "$acp_id" '{"stopReason":"end_turn"}' ;;
 		session/cancel)
-			# Answered even though the polling loop above consumes the cancel:
-			# a client that sends it as a request rather than a notification is
-			# not left waiting for a reply that never comes.
 			acp_reply "$acp_id" '{}' ;;
 		authenticate | logout)
 			acp_reply "$acp_id" '{}' ;;
 		*)
-			# Includes fs/* and terminal/*: not advertised above, so naming the
-			# method is more useful than a silent success.
 			[ -n "$acp_id" ] && acp_error "$acp_id" -32601 "method not found: $acp_method" ;;
 		esac
 	done
 	exit 0
 fi
 
-# Which agent answers this question. The command line beats the saved default:
-# `terat set agent claude` is what you normally want, and `terat grok "…"` is
-# how you ask one question of something else.
 agent=$(cfg_get agent)
 agent=${agent:-pi}
-# ACP names the agent it wants for this turn. An override rather than a
-# `terat set agent`, so a client switching harnesses cannot rewrite the saved
-# default; and an environment variable rather than extra argv, because the
-# question already travels on stdin and a trailing `--` was being read as the
-# question itself.
 agent=${TERAT_ACP_AGENT:-$agent}
-# `--trace` asks for a trace on this one question. It is a flag rather than a
-# variable because the useful moments are the irregular ones — a build that
-# failed once, a question worth keeping — and exporting a variable for those is
-# how the interesting runs end up untraced.
-# Three states, not a boolean: empty means no opinion (trace when a collector
-# is configured), `1` means trace, `off` means no trace even with a collector.
 trace_want=''
-# Anything beginning with `--` that is not `--trace` is refused, so a mistyped
-# option cannot be read as the question.
 while :; do
 	case ${1:-} in
 	--trace)
@@ -833,13 +644,7 @@ while :; do
 		break ;;
 	esac
 done
-# A trace that is on by default has to be per provider: pointing terat at a
-# different endpoint should not inherit the span collector of the one before it.
-# `terat set trace on|off` stores it; the variable wins when both are present.
 if [ -z "$trace_want" ]; then
-	# The environment comes first: ask mode's Ctrl+X t sets TERAT_TRACE for the
-	# session, and a session toggle has to beat the saved default or it does
-	# nothing in the shell where it was pressed.
 	case ${TERAT_TRACE:-} in
 	1) trace_want=1 ;;
 	0 | off) trace_want=off ;;
@@ -850,18 +655,12 @@ if [ -z "$trace_want" ]; then
 		esac ;;
 	esac
 fi
-# `--` ends the options, so everything after it is the question. Needed because
-# ask mode sends the question as argv words: without this, asking "claude wrote
-# this" would select the claude agent and lose the word.
 if [ "${1:-}" = '--' ]; then
 	shift
 else
 	case ${1:-} in
 	'' | -*) ;; # no question yet, or a flag rather than a name
 	*)
-		# Only with a question behind it. `terat claude` alone asks the
-		# configured agent about claude; it is not a request to ask claude
-		# nothing, and the word must not be shifted away and lost.
 		if is_agent "$1" && [ "$#" -gt 1 ]; then
 			agent=$1
 			shift
@@ -869,10 +668,6 @@ else
 	esac
 fi
 
-# The trace id is minted here, before any config is generated, because four of
-# the six carry it *inside* that config: only pi has an extension mechanism that
-# can add a header afterwards. Minting it later left the generated files with no
-# id in them and the propagation silently absent.
 traceparent=''
 if [ "$trace_want" = 1 ] && [ -z "${TERAT_TRACE_ID:-}" ]; then
 	TERAT_TRACE_ID=$(od -An -tx1 -N16 /dev/urandom 2>/dev/null | tr -d ' \n')
@@ -881,12 +676,7 @@ if [ "$trace_want" = 1 ] && [ -z "${TERAT_TRACE_ID:-}" ]; then
 	*) TERAT_TRACE_ID='' ;;
 	esac
 fi
-# `trace off` wins over an exported id, in both halves. Propagating the header
-# while the span is suppressed tags the router's ledger and posts nothing, which
-# is exactly the split one trace id exists to prevent.
 if [ "$trace_want" != off ] && [ -n "${TERAT_TRACE_ID:-}" ]; then
-	# The span id is the other half of a traceparent and is per request, so it is
-	# minted once here rather than in each branch below, where the copies drift.
 	trace_span=${TERAT_TRACE_SPAN:-$(od -An -tx1 -N8 /dev/urandom 2>/dev/null | tr -d ' \n')}
 	case $trace_span in
 	????????????????) ;;
@@ -894,43 +684,22 @@ if [ "$trace_want" != off ] && [ -n "${TERAT_TRACE_ID:-}" ]; then
 	esac
 	TERAT_TRACE_SPAN=$trace_span
 	export TERAT_TRACE_SPAN
-	# 00-<trace>-<span>-01: the W3C shape the router parses back out.
 	traceparent="00-${TERAT_TRACE_ID}-${trace_span}-01"
 fi
 
-# Settings only matter if they reach the agent, and each agent is reached
-# differently. This is all of that difference.
 cfg_url=$(cfg_get url)
 cfg_key=$(cfg_get key)
 cfg_model=$(cfg_get model)
-# The environment wins over the file. A container, a fresh VPS or a CI runner has
-# nowhere to write a settings file, and `terat set` would need one: these three
-# are the whole interface, so a machine that can run terat can be configured with
-# `docker run -e` and nothing else. They also win over a file that a base image
-# shipped, which is what makes an override an override.
 cfg_url=${TERAT_URL:-$cfg_url}
 cfg_key=${TERAT_KEY:-$cfg_key}
 cfg_model=${TERAT_MODEL:-$cfg_model}
-# ACP asks a turn with a model of its own choosing. It is an override for this one
-# run and never a `terat set model`, so a client switching models cannot rewrite
-# the saved default of whoever started the bridge.
 [ -n "${TERAT_ACP_MODEL:-}" ] && cfg_model=$TERAT_ACP_MODEL
 if [ -n "$cfg_url$cfg_key$cfg_model" ]; then
-	# The model is a command-line flag for the agents that spell one and a field
-	# in the generated file for the two that do not. Sending it as an env var
-	# only worked for grok, which is how this was found: claude quietly fell back
-	# to its own default and asked the router for a model it does not serve.
 	case $agent in
 	claude)
-		# claude appends /v1/messages to this itself, so a base that already
-		# ends in /v1 asks it for /v1/v1/messages and the answer comes back as
-		# "may not exist or you may not have access to it", which reads like a
-		# bad model id and sends you looking in the wrong place.
 		[ -n "$cfg_url" ] && export ANTHROPIC_BASE_URL=${cfg_url%/v1}
 		[ -n "$cfg_url" ] && export ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL%/}
 		[ -n "$cfg_key" ] && export ANTHROPIC_API_KEY=$cfg_key
-		# claude has no header flag but does read a header list from the
-		# environment, newline separated `Name: value`.
 		[ -n "$traceparent" ] && {
 			ANTHROPIC_CUSTOM_HEADERS="traceparent: $traceparent"
 			export ANTHROPIC_CUSTOM_HEADERS
@@ -941,15 +710,7 @@ if [ -n "$cfg_url$cfg_key$cfg_model" ]; then
 		[ -n "$cfg_key" ] && export GROK_API_KEY=$cfg_key
 		[ -n "$cfg_model" ] && model_arg="-m $cfg_model" ;;
 	pi)
-		# pi reads providers from models.json inside an agent dir it lets you
-		# move, so the settings become that file. Nothing is written into a
-		# real ~/.pi: a working hand-written setup is left exactly as it was.
-		# `input` is not cosmetic. A model entry without it is text-only as far
-		# as pi is concerned, so read drops the image from the request and the
-		# answer says the model cannot see pictures — even for a model that can.
 		pdir=${TMPDIR:-/tmp}/terat.$agent.$$
-		# The generated file holds the key: `>` takes the umask, so set one that
-		# matches the settings file's 600.
 		umask 077
 		mkdir -p "$pdir" 2>/dev/null
 		printf '{"providers":{"terat":{"baseUrl":"%s","api":"openai-completions","apiKey":"%s","models":[{"id":"%s","input":["text","image"]}]}}}\n' \
@@ -965,11 +726,6 @@ if [ -n "$cfg_url$cfg_key$cfg_model" ]; then
 		odir=${TMPDIR:-/tmp}/terat.$agent.$$
 		umask 077
 		mkdir -p "$odir" 2>/dev/null
-		# Same lesson as pi, different spelling: without `modalities` opencode
-		# treats the model as text-only and refuses to attach the file.
-		# The header fragment is built by hand: `${var:+word}` with a brace in the
-		# word leaves a literal `}` behind when the variable is unset, which is one
-		# stray brace in the JSON and a config opencode cannot parse.
 		oc_hdr=''
 		[ -n "$traceparent" ] && oc_hdr=",\"headers\":{\"traceparent\":\"$traceparent\"}"
 		printf '{"$schema":"https://opencode.ai/config.json","provider":{"terat":{"npm":"@ai-sdk/openai-compatible","name":"terat","options":{"baseURL":"%s","apiKey":"%s"%s},"models":{"%s":{"name":"%s","modalities":{"input":["text","image"]}}}}},"model":"terat/%s"}\n' \
@@ -980,9 +736,6 @@ if [ -n "$cfg_url$cfg_key$cfg_model" ]; then
 		export OPENCODE_CONFIG_DIR
 		terat_generated=$odir ;;
 	codex)
-		# codex has no config-dir variable in this build, but it does take
-		# `-c key=value`, which is a real interface: a file in ~/.codex would
-		# mean editing someone else's config.
 		extra=''
 		[ -n "$cfg_url" ] && extra="$extra -c model_providers.terat.base_url=$cfg_url"
 		[ -n "$cfg_key" ] && extra="$extra -c model_providers.terat.env_key=TERAT_KEY"
@@ -990,8 +743,6 @@ if [ -n "$cfg_url$cfg_key$cfg_model" ]; then
 		extra="$extra -c model_providers.terat.name=terat -c model_providers.terat.wire_api=responses"
 		[ -n "$cfg_url" ] && extra="$extra -c model_provider=terat"
 		[ -n "$cfg_key" ] && { TERAT_KEY=$cfg_key; export TERAT_KEY; }
-		# codex cannot express a header map on the command line, but
-		# `env_http_headers` maps a header name to an env var, which it can.
 		[ -n "$traceparent" ] && {
 			TERAT_TRACEPARENT=$traceparent
 			export TERAT_TRACEPARENT
@@ -999,17 +750,9 @@ if [ -n "$cfg_url$cfg_key$cfg_model" ]; then
 		}
 		codex_extra=$extra ;;
 	dsh)
-		# dsh names an env var rather than holding a key, and the variable has to
-		# be exported for the child to see it. Same shape as the profile patch
-		# this repo already tests against: `apiKeyEnv`, not a literal `apiKey`.
 		ddir=${TMPDIR:-/tmp}/terat.$agent.$$
 		umask 077
 		mkdir -p "$ddir/profiles/headless" 2>/dev/null
-		# `input` matters here for the same reason it does in pi's models.json:
-		# dsh bundles the same library and drops an image the model entry does not
-		# claim, so without it the answer says the model cannot see pictures.
-		# Header lines are real newlines, not %s carrying \n: printf leaves an
-		# escape that arrives through an argument literal.
 		dsh_hdr=''
 		[ -n "$traceparent" ] &&
 			dsh_hdr="        headers:
@@ -1024,8 +767,6 @@ if [ -n "$cfg_url$cfg_key$cfg_model" ]; then
 		export DSH_HOME
 		terat_generated=$ddir ;;
 	*)
-		# An agent added to the tables gets the four common spellings, so a
-		# harness that reads any of them is configured.
 		[ -n "$cfg_url" ] && { TERAT_URL=$cfg_url; export TERAT_URL; }
 		[ -n "$cfg_key" ] && { TERAT_KEY=$cfg_key; export TERAT_KEY; }
 		[ -n "$cfg_url" ] && { OPENAI_BASE_URL=$cfg_url; export OPENAI_BASE_URL; }
@@ -1034,49 +775,26 @@ if [ -n "$cfg_url$cfg_key$cfg_model" ]; then
 	esac
 fi
 
-# The label and the command follow the agent, so `terat claude` says `Claude:`
-# and `terat grok` puts the question where grok will read it.
 TERAT_NAME=${TERAT_NAME:-$(agent_name "$agent")}
 TERAT_AGENT=$agent
 export TERAT_NAME TERAT_AGENT
-# TERAT_CMD is the escape hatch and still wins: a caller who spelled a command
-# out meant that command, and replacing it here would ignore them silently.
 if [ -n "${TERAT_CMD:-}" ]; then
 	pi_cmd=$TERAT_CMD
 else
 	pi_cmd="$(agent_cmd "$agent")${model_arg:+ $model_arg}${codex_extra:-}"
 fi
 
-# Some harnesses will not read the question from stdin: grok's -p demands it as
-# an argument, and so does dsh in headless mode. Rather than make every such
-# user write a wrapper script, `{}` in TERAT_CMD means "the question goes here".
-# Without the placeholder the command is left exactly as given, so a harness
-# that reads stdin needs to know nothing about this.
 case $pi_cmd in
 *'{}'*) q_in_argv=1 ;;
 *) q_in_argv='' ;;
 esac
 
-# pi can be told what the transcript *is* rather than left to infer it. The
-# question-first ordering above already stops past commands from being treated
-# as requests, and this says it outright: a harness that runs a `cmd:` line from
-# a previous turn does real damage, because those lines were real commands.
-#
-# Only the default command gets it. A caller who set TERAT_CMD chose a contract
-# (question on stdin, answer on stdout) and may not accept extra flags; adding
-# one behind their back would turn a working setup into "the harness exited 2".
 terat_sys='You answer one question per run inside a terminal. The message is the
 question first, then context that has already happened: the working directory,
 shell history whose commands were already run, and files the user attached.
 Lines beginning "cmd:" are history. Never re-run them. Do not run commands,
 read files, or use tools unless the question itself asks for that. Answer the
 question in as few lines as it needs and stop.'
-# Passed as a real argument in run_harness, not glued onto $pi_cmd: that
-# string is word-split, so a quoted phrase inside it would arrive mangled and
-# a multi-line one would arrive in pieces.
-# Only pi and claude take --append-system-prompt. Sending it to the others is
-# not a degradation, it is a hard failure: codex exits 2 with "unexpected
-# argument", so a first-class agent would look broken on its first question.
 sys_ok=''
 if [ -z "${TERAT_CMD:-}" ] && [ -z "$q_in_argv" ]; then
 	case $agent in
@@ -1084,19 +802,11 @@ if [ -z "${TERAT_CMD:-}" ] && [ -z "$q_in_argv" ]; then
 	esac
 fi
 
-# With no question, terat is a shell, and a shell needs no agent. Decided
-# before the prerequisite check so a fresh machine can start the shell
-# that installs one.
 bare_shell=''
 if [ "$#" -eq 0 ] && [ -t 0 ] && [ -t 1 ]; then
 	bare_shell=1
 fi
 
-# The one prerequisite: the agent itself. Said plainly, because the failure it
-# causes is a shell error ("claude: not found") followed by "no answer", which
-# reads like terat is broken rather than missing something to talk to. Only
-# checked when we chose the command: TERAT_CMD is the caller's business, and a
-# path that does not exist yet is a legitimate thing to test.
 if [ -z "${TERAT_CMD:-}" ] && [ -z "$bare_shell" ]; then
 	bin=$(agent_cmd "$agent" | awk '{print $1}')
 	if ! command -v "$bin" >/dev/null 2>&1; then
@@ -1106,21 +816,10 @@ if [ -z "${TERAT_CMD:-}" ] && [ -z "$bare_shell" ]; then
 	fi
 fi
 
-# Trace propagation, off unless TERAT_TRACE_ID is set. The id goes on the request
-# as `traceparent`, so the question, the model calls it causes and the OTLP spans
-# all carry one value. Loaded with `-e` rather than as a header in models.json: pi
-# treats a header that resolves to nothing as fatal, and the extension returns
-# immediately when the variables are absent.
-#
-# A traceparent takes exactly 32 lowercase hex digits; anything else would be
-# stored as an id that matches nothing, so propagation is dropped instead.
 if [ "$trace_want" = 1 ] && [ -z "$trace_id" ]; then
 	trace_id=$(od -An -tx1 -N16 /dev/urandom 2>/dev/null | tr -d ' \n')
 fi
 trace_id=${trace_id:-${TERAT_TRACE_ID:-}}
-# The directory holding a path, or the cwd for a bare name on PATH. Parameter
-# expansion, not dirname(1): another binary to be missing, and on a stripped
-# PATH it printed "dirname: not found" after the answer, reading as a failure.
 dir_of() {
 	case $1 in
 	*/*) (cd "${1%/*}" 2>/dev/null && pwd) ;;
@@ -1132,10 +831,6 @@ case $trace_id in
 *[!0-9a-f]*) trace_id= ;;
 esac
 [ ${#trace_id} -eq 32 ] || trace_id=
-# The extension is pi's alone: `-e` loads a JS module into pi, and appending it
-# to the other five is not a no-op — claude answers "unknown option '-e'" and
-# opencode reads it as its own flag, so asking for a trace broke two agents
-# outright. The other four carry the header in their own config instead.
 if [ -n "$trace_id" ] && [ -z "${TERAT_CMD:-}" ] && [ "$agent" = pi ]; then
 	trace_span=${TERAT_TRACE_SPAN:-$(od -An -tx1 -N8 /dev/urandom 2>/dev/null | tr -d ' \n')}
 	case $trace_span in
@@ -1146,22 +841,12 @@ if [ -n "$trace_id" ] && [ -z "${TERAT_CMD:-}" ] && [ "$agent" = pi ]; then
 	if [ -f "$trace_ext" ]; then
 		TERAT_TRACE_ID=$trace_id TERAT_TRACE_SPAN=$trace_span \
 			export TERAT_TRACE_ID TERAT_TRACE_SPAN
-		# The extension registers the header against a provider *name*, and a
-		# name that does not match the one in models.json is not an error: the
-		# header simply never goes out, so the trace posts and the router never
-		# hears of it. terat's own generated config calls its provider `terat`;
-		# only a hand-written model config uses another name.
 		[ -z "${TERAT_TRACE_PROVIDER:-}" ] && [ -n "$pdir" ] &&
 			{ TERAT_TRACE_PROVIDER=terat; export TERAT_TRACE_PROVIDER; }
 		pi_cmd="$pi_cmd -e $trace_ext"
 	fi
 fi
 
-# Attachments. A word starting with @ or # names a file or folder: pi receives
-# it as an @file argument, and a folder is expanded to the files it holds
-# because pi cannot read a directory. A word that names nothing stays part of
-# the question, so "@nobody" is safe. In ask mode the zsh hook has already
-# rejoined unquoted paths containing spaces, so what arrives here is one word.
 : >"$tmp.files"
 q=''
 for a in "$@"; do
@@ -1181,22 +866,13 @@ for a in "$@"; do
 	esac
 done
 q=${q# }
-# A folder and a file inside it can both be named; keep one of each.
 awk '!seen[$0]++' "$tmp.files" >"$tmp.uniq" 2>/dev/null
-# Attachments are inlined rather than passed as @path arguments. Only some
-# harnesses understand that syntax, and a path given to one that does not is
-# silently useless: the model is told about a file it cannot open and answers
-# about the path instead of the contents. Sending the bytes works everywhere and
-# costs one read.
 : >"$tmp.attach"
 attach_total=0
 while IFS= read -r f; do
 	[ -n "$f" ] || continue
 	size=$(wc -c <"$f" 2>/dev/null | tr -d ' ')
 	size=${size:-0}
-	# Binary would corrupt the context rather than inform it, so name it and
-	# move on. A NUL byte in the first kilobyte is the portable test: `file` is
-	# not everywhere and a MIME guess is wrong more often than it is right.
 	if od -An -tx1 -N1024 "$f" 2>/dev/null | tr -d ' \n' | grep -q '00'; then
 		printf 'File: %s (binary, %s bytes, not inlined)\n' "$f" "$size" >>"$tmp.attach"
 		continue
@@ -1214,10 +890,6 @@ while IFS= read -r f; do
 done <"$tmp.uniq"
 rm -f "$tmp.files" "$tmp.uniq"
 
-# `terat` with no question is just a shell: the same zsh you would otherwise
-# start, which loads terat.zsh and with it the capture. Nothing is wrapped, so
-# this is all of "normal mode". It has to come before the read below, which
-# would otherwise block waiting for a question that is not coming.
 if [ -n "$bare_shell" ]; then
 	exec "${TERAT_SHELL_BIN:-/bin/zsh}" -l
 fi
@@ -1225,21 +897,11 @@ fi
 [ -z "$q" ] && IFS= read -r q
 [ -z "$q" ] && [ "$#" -eq 0 ] && exit 0
 
-# Output piped in is context. A shell cannot see what its own commands printed,
-# so this is the one way to show it: `ls -l | terat "what is this?"`. With no
-# question given, the first line of the pipe is the question instead.
 out=''
 if [ ! -t 0 ]; then
 	if [ -n "$q" ]; then out=$(tail -n 200); else IFS= read -r q; fi
 fi
 
-# Stop the harness and any children it still has. Children are signalled first
-# and the parent last, because killing the parent reparents them to init and
-# they become unreachable by parent pid. Only one level deep is enough: the
-# watchdog fires only when no tool is in flight (that is the condition it
-# measures), so the tree is at most a shell wrapper and the command it ran.
-# A Ctrl-C needs none of this — the terminal signals the whole foreground
-# group, which includes the tool.
 stop_child() {
 	[ -n "${pid:-}" ] || return 0
 	pkill -TERM -P "$pid" 2>/dev/null
@@ -1250,27 +912,19 @@ stop_child() {
 	return 0
 }
 
-# Every file this run may leave behind. Named once: the list was written out at
-# each exit, and a file missing from one of them leaks.
 tmp_files() {
 	rm -f "$tmp" "$tmp.err" "$tmp.to" "$tmp.stop" "$tmp.stopped" "$tmp.attach" \
 		"$tmp.files" "$tmp.uniq"
-	# The agent's settings were rendered into a directory of their own for this
-	# run. It holds a key, so it goes rather than being left in /tmp.
 	[ -n "${terat_generated:-}" ] && rm -rf "$terat_generated" 2>/dev/null
 	return 0
 }
 
-# A run that ends without an answer: keep the trace (an error is the run whose
-# trace is worth having), clear up, fail.
 give_up() {
 	trace_ask
 	tmp_files
 	exit "${1:-1}"
 }
 
-# Clear the spinner and give the cursor back. The spinner has the line to
-# itself, so `\r`+erase clears exactly it.
 wipe() {
 	[ -t 1 ] || return 0
 	printf '\r\033[K\033[?25h'
@@ -1286,11 +940,6 @@ bye() {
 
 trap 'bye 130' INT TERM
 
-# Spin below the question, hide the cursor (it would sit on the frame), and
-# Wait for the run to finish, not for a pause in the output. In json mode pi
-# writes `agent_end` on one line when the agent is done, so this stops exactly
-# then: a tool that is silent for a minute is just working, and is not mistaken
-# for a finished answer. The spinner is drawn meanwhile.
 spin() {
 	case ${LC_ALL:-${LC_CTYPE:-${LANG:-}}} in
 	*[Uu][Tt][Ff]*8*) frames='⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏' ;;
@@ -1302,13 +951,7 @@ spin() {
 			sleep 0.1 2>/dev/null || sleep 1
 			kill -0 "$pid" 2>/dev/null || return 0
 			[ -t 1 ] && printf '\r%s ' "$f"
-			# A run that ends without the marker (an error, an older pi)
-			# must still stop, so fall back to the old quiet rule only once
-			# the answer has gone quiet for a long time.
 			if done_yet; then
-				# Record that the stop was ours: a harness killed by this
-				# signal makes `wait` return 143, which must not read as a
-				# failure when it had already answered.
 				: >"$tmp.stopped"
 				stop_child
 				return 0
@@ -1317,32 +960,21 @@ spin() {
 	done
 }
 
-# How many bytes have arrived so far. `wc -c <` on a missing file fails in the
-# shell itself, so it is spelled once with the redirect and the trim.
 arrived() {
 	_n=$(wc -c <"$tmp" 2>/dev/null | tr -d ' ')
 	printf '%s' "${_n:-0}"
 }
 
-# Has the agent finished? In json mode `agent_end` is the only true signal.
 done_yet() {
 	grep -q '"type":"agent_end"' "$tmp" 2>/dev/null && return 0
-	# A json run without the marker is still going (or died); the watchdog
-	# decides that, not a pause in the stream.
 	grep -q '"type":"session"' "$tmp" 2>/dev/null && return 1
 	size=$(arrived)
 	[ "$size" -gt 0 ] || { last=0; g=0; return 1; }
 	[ "$size" = "$last" ] || { last=$size; g=0; return 1; }
 	g=$((g + 1))
-	# g counts consecutive reads with no new bytes; reaching the grace count
-	# is what "done" means. Comparing the other way ended the run on the first
-	# quiet tick, which is 0.1s into a normal streamed answer.
 	[ "$g" -ge "${TERAT_GRACE:-40}" ]
 }
 
-# Is a tool call still running? A `tool_execution_start` with no matching
-# `tool_execution_end`. pi emits both as a pair, so a start without an end means
-# one is in flight.
 tool_busy() {
 	[ -s "$tmp" ] || return 1
 	s=$(grep -c '"type":"tool_execution_start"' "$tmp" 2>/dev/null)
@@ -1350,15 +982,6 @@ tool_busy() {
 	[ "${s:-0}" -gt "${e:-0}" ]
 }
 
-# The model cannot see the screen, so it gets the two cheap facts that make
-# "where is that file" and "clean up these screenshots" answerable: where this
-# shell is, and what sits there. Bounded, so it never crowds out the thread.
-#
-# Visible names only, because that is what the person sees when they type `ls`
-# and therefore what they mean by "those folders". dotfiles are not hidden from
-# the model, only pushed down: a home directory holds hundreds of them and they
-# would fill the list alphabetically before any real folder was named. A folder
-# of nothing but dotfiles still gets listed.
 here() {
 	printf 'Where: %s\n' "$PWD"
 	names=$(ls 2>/dev/null)
@@ -1372,9 +995,6 @@ here() {
 	printf '\n'
 }
 
-# A turn recorded before the system prompt was fixed may hold tool markup. Left
-# in the transcript it teaches the next answer to do the same, so drop the whole
-# turn rather than the tag: a half-turn would be read as an answer.
 clean() {
 	awk '
 		/^user: / { if (block ~ /DSML|<\|.*\|>/) block = ""; printf "%s", block; block = $0 "\n"; next }
@@ -1383,9 +1003,6 @@ clean() {
 	'
 }
 
-# Run the harness. With `{}` in TERAT_CMD the question goes into the command
-# line instead of stdin, because grok -p and dsh --profile headless both refuse
-# to read it anywhere else; everything else keeps the plain pipe.
 run_harness() {
 	if [ -z "$q_in_argv" ]; then
 		if [ -n "$sys_ok" ]; then
@@ -1395,15 +1012,10 @@ run_harness() {
 		fi
 		return
 	fi
-	# Build the argument list without eval: the question and the file contents
-	# are arbitrary text, and word-splitting them would both mangle spaces and
-	# execute anything that looked like shell syntax.
 	prompt=$(cat)
 	unset _carry
 	for _a in $pi_cmd; do
 		if [ "$_a" = '{}' ]; then
-			# Two placeholders in a row would otherwise overwrite the first
-			# instead of inserting it, quietly losing an argument.
 			[ -n "${_carry+x}" ] && set -- "$@" "$_carry"
 			_carry="$prompt"
 		elif [ -n "${_carry+x}" ]; then
@@ -1414,18 +1026,9 @@ run_harness() {
 			set -- "$@" "$_a"
 		fi
 	done
-	# A trailing placeholder, or several: flush whatever is still pending.
 	[ -n "${_carry+x}" ] && set -- "$@" "$_carry"
 	exec "$@"
 }
-# The question comes first, and everything else follows it labelled as context.
-#
-# This is not cosmetic. The harness is an agent with a shell, and a transcript
-# that opens with `cmd: rm -rf ...` reads like a request: measured against pi,
-# a past command in that position was re-executed in roughly one run out of
-# three. Putting the question first, and saying plainly that the rest has
-# already happened, dropped that to zero in every trial. Order alone is not a
-# guarantee, which is why the system prompt below repeats it.
 ctx_attached=''
 [ -s "$tmp.attach" ] && ctx_attached=1
 {
@@ -1438,16 +1041,9 @@ ctx_attached=''
 		printf '\n'
 	}
 	[ -n "$out" ] && printf 'Output already on screen:\n%s\n\n' "$out"
-	# The files the question refers to, inlined above, so that a harness with
-	# no @file support is given the same information as one with it.
 	[ -n "$ctx_attached" ] && { printf 'Attached files:\n'; cat "$tmp.attach"; }
 } | run_harness >"$tmp" 2>"$tmp.err" &
 pid=$!
-# The watchdog measures silence, not total time, and a running tool does not count
-# as silence: `networkQuality` takes ~50s and a soak test half an hour, both
-# silent. A total ceiling cannot accommodate long work and still return the prompt
-# when a run wedges. Quiet with nothing in flight means wedged; quiet with a tool
-# running is just work.
 idle=0
 (
 	while [ ! -e "$tmp.stop" ]; do
@@ -1464,10 +1060,6 @@ idle=0
 		fi
 		idle=$((idle + 1))
 		if [ "$idle" -ge "$max" ]; then
-			# Mark first, then kill. The other order races: killing the
-			# child wakes the main shell's `wait` immediately, and it can
-			# reach the answer check and clean up before this subshell
-			# gets to write the marker it is about to be judged by.
 			: >"$tmp.to"
 			stop_child
 			break
@@ -1484,9 +1076,6 @@ kill "$watchdog" 2>/dev/null
 wait "$watchdog" 2>/dev/null
 wipe
 
-# The stream is json lines, one object per event. The answer is the text of the
-# last assistant message that actually spoke: a turn that only called a tool has
-# no text, and its markup must never be printed as if it were the reply.
 answer() {
 	awk '
 		function unescape(s,   out, c2) {
@@ -1503,8 +1092,6 @@ answer() {
 			return out
 		}
 		/"type":"message_end"/ && /"role":"assistant"/ {
-			# One message may hold several content chunks; join every text
-			# one and ignore tool calls, which carry arguments, not prose.
 			rest = $0; text = ""
 			while ((i = index(rest, "\"type\":\"text\",\"text\":\"")) > 0) {
 				rest = substr(rest, i + 22)
@@ -1513,11 +1100,6 @@ answer() {
 			}
 			if (text != "") last = text
 		}
-		# A plain-text run (an older pi, or TERAT_CMD) has no events: keep it.
-		# grok-cli in headless mode writes the conversation as one
-		# {"role":...,"content":...} object per line, which is the same
-		# information in a different shape: take the last assistant line and
-		# drop the envelope, so the answer is the answer and not a transcript.
 		/^[[:space:]]*\{[[:space:]]*"role":"assistant"[[:space:]]*,[[:space:]]*"content":/ {
 			i = index($0, "\"content\":\"")
 			if (i > 0) {
@@ -1526,48 +1108,24 @@ answer() {
 			}
 			next
 		}
-		# Blank lines are spacing between events, not prose: counting them
-		# would let a run that emitted nothing but separators look like a
-		# plain-text answer
-		# and win over the real one.
 		NF && !/^[[:space:]]*\{[[:space:]]*"role":/ && !/^\{/ && !/^\}/ { plain = plain $0 "\n" }
 		END { if (plain != "") printf "%s", plain; else if (last != "") printf "%s\n", last }
 	'
 }
 
-# --- tracing ---------------------------------------------------------------
-# Off unless TERAT_OTLP names an endpoint. The trace is built from the same event
-# stream the answer came from, so it cannot disagree with what ran, and it is
-# posted after the answer in the background: a slow collector costs nothing.
-# Called from the failure paths too, which are the runs worth tracing.
 trace_ask() {
-	# `set trace off` turns the trace off even when a collector is configured:
-	# the setting exists to be obeyed, and a run that posts anyway makes the
-	# switch decorative.
 	[ "$trace_want" = off ] && return 0
 	if [ -z "${TERAT_OTLP:-}" ] || [ ! -s "$tmp" ]; then
 		return 0
 	fi
-	# Resolve the entry point before taking its directory: terat is normally
-	# reached through ~/.local/bin/terat, and terat-trace.awk sits next to the
-	# real script rather than next to the link. Getting this wrong drops every
-	# trace silently, which is the worst way to lose them.
 	self=$0
 	[ -L "$self" ] && self=$(readlink "$self" 2>/dev/null) && [ -n "$self" ] || self=$0
-	# Parameter expansion, not dirname(1): that is another binary to be missing.
-	# On a stripped PATH it printed "dirname: not found" after the answer had
-	# already been printed, which reads as a failure when nothing failed.
 	trace_dir=$(dir_of "$self")
-	# The span builder is a separate file, and optional: without it there is no
-	# trace, so say that once rather than posting nothing and looking healthy.
 	if [ ! -r "$trace_dir/terat-trace.awk" ]; then
 		printf 'terat: tracing is on but terat-trace.awk is not beside %s\n' "$self" >&2
 		printf 'terat: no trace was sent for this question\n' >&2
 		return 0
 	fi
-	# Reuse the propagated id when there is one: the whole point of exporting
-	# traceparent is that the spans and the router's ledger settle on one value,
-	# so the trace must not mint a second id and quietly split them apart.
 	trace=$trace_id
 	[ -n "$trace" ] || trace=$(od -An -tx1 -N16 /dev/urandom 2>/dev/null | tr -d ' \n')
 	case $trace in
@@ -1584,13 +1142,6 @@ trace_ask() {
 	if [ -s "$body" ] && command -v curl >/dev/null 2>&1; then
 		auth=
 		[ -n "${TERAT_OTLP_KEY:-}" ] && auth="Authorization: Bearer $TERAT_OTLP_KEY"
-		# Off by default, because a trace is not worth a broken prompt. It also
-		# does not go to stderr: this runs just after the answer, while the
-		# prompt is being redrawn, so stray output would land in the middle of
-		# it. A file is quiet and still says afterwards what went wrong.
-		#   unset / 0 / no     nothing at all
-		#   1 / yes / true     append to ${TMPDIR}/terat.otlp.log
-		#   anything else      treat it as the log path
 		dbg=
 		case ${TERAT_OTLP_DEBUG:-} in
 		'' | 0 | no | false) ;;
@@ -1598,10 +1149,6 @@ trace_ask() {
 		*) dbg=$TERAT_OTLP_DEBUG ;;
 		esac
 		(
-			# One request either way. The response is written to a file rather
-			# than discarded so that the debugging branch can show it: a 400
-			# body names the offending field, which is the whole reason for
-			# turning the log on.
 			code=$(curl -sS -m 10 -X POST "$TERAT_OTLP" \
 				-H 'Content-Type: application/json' \
 				${auth:+-H "$auth"} \
@@ -1612,8 +1159,6 @@ trace_ask() {
 					printf '%s %s %s\n' \
 						"$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)" \
 						"${code:-curl-failed}" "$TERAT_OTLP"
-					# Kept short so the log stays readable when several
-					# questions are being asked.
 					[ -s "$body.res" ] && sed 's/^/  response: /' "$body.res" | head -5
 					[ -s "$body.err" ] && sed 's/^/  stderr: /' "$body.err" | head -5
 				} >>"$dbg" 2>/dev/null
@@ -1625,16 +1170,11 @@ trace_ask() {
 	fi
 }
 
-# Nothing at all came back: report why rather than printing an empty label.
 if [ ! -s "$tmp" ]; then
 	[ -s "$tmp.err" ] && head -5 "$tmp.err" >&2
 	if [ -e "$tmp.to" ]; then
 		printf 'terat: no output for %ss with no tool running, so the run looks stuck\n' "$max" >&2
 	elif [ "$rc" -eq 0 ]; then
-		# It ran, succeeded by its own account, and said nothing. That is what
-		# a harness does when the model returns empty content, and saying
-		# "no answer" without the exit code sends you looking in the wrong
-		# place.
 		printf 'terat: no answer (the harness exited 0 and printed nothing)\n' >&2
 	else
 		printf 'terat: no answer (the harness exited %s)\n' "$rc" >&2
@@ -1643,12 +1183,7 @@ if [ ! -s "$tmp" ]; then
 fi
 
 ans=$(answer <"$tmp")
-# A harness that pads its output is not starting the answer with whitespace.
-# Blank lines before it are noise; the indentation of the first real line is
-# not, because that is how a code block begins.
 ans=$(printf '%s\n' "$ans" | awk 'f { print; next } NF { f = 1; print }')
-# The label supplies one space, so do not add a second when the answer brings
-# its own. The answer itself is printed exactly as it arrived.
 label() {
 	case ${ans%%[![:space:]]*} in
 	'') printf '%s: %s\n' "${TERAT_NAME:-Pi}" "$ans" ;;
@@ -1656,34 +1191,14 @@ label() {
 	esac
 }
 
-# A harness that exits non-zero did not answer. A CLI run by hand usually says
-# why on stdout and exits 1 ("rate limited, retry later"); serving that as the
-# answer is worse than saying the run failed, because it reads like the model
-# replied. Keep the text, but mark it as what it is.
-# Our own stop is not a failure: the harness had already answered and simply
-# did not exit, which is normal for pi. Only a harness that failed on its own
-# gets to have its complaint withheld.
 if [ "$rc" -ne 0 ] && [ -n "$ans" ] && [ ! -e "$tmp.stopped" ]; then
 	printf 'terat: the harness exited %s; it said:\n' "$rc" >&2
 	printf '%s\n' "$ans" >&2
 	give_up
 fi
 
-# Events came back but nobody spoke: the run failed, or it only used tools. Say
-# so; do not print markup or an empty answer as though it were a reply.
 if [ -z "$ans" ]; then
-	# Say what the harness actually said. pi reports failures as a json event,
-	# but any other command put behind TERAT_CMD just writes to stderr, and a
-	# generic "no answer" hides a missing key or a bad flag behind a message
-	# that looks like terat's fault. Its own words are more use than ours.
-	# Pull just the message out of the error event. Printing the matched
-	# fragment showed the user '"type":"error","message":"quota exceeded"',
-	# which is the harness's wire format, not its words.
 	msg=$(sed -n 's/.*"type":"error"[^}]*"message":"\([^"]*\)".*/\1/p' "$tmp" 2>/dev/null | head -1)
-	# A provider that rejects the call puts its words in the assistant message's
-	# own errorMessage, which the pattern above does not see: pi then ends the
-	# turn with stopReason "error" and no text at all, and all the user learns is
-	# "ended without a reply" while their key is the actual problem.
 	if [ -z "$msg" ]; then
 		msg=$(awk '
 			/"errorMessage":"/ {
@@ -1700,9 +1215,6 @@ if [ -z "$ans" ]; then
 			}' "$tmp" 2>/dev/null)
 	fi
 	[ -n "$msg" ] || msg=$(grep -v '^[[:space:]]*$' "$tmp.err" 2>/dev/null | head -1)
-	# Checked before the generic wording because a killed run answers nothing:
-	# reporting "ended without a reply" for it sends you looking for a model
-	# fault when the real cause was the clock, and TERAT_MAX is the fix.
 	if [ -e "$tmp.to" ]; then
 		printf 'terat: no output for %ss with no tool running, so the run looks stuck\n' "$max" >&2
 	elif [ -n "$msg" ]; then
@@ -1713,36 +1225,13 @@ if [ -z "$ans" ]; then
 	give_up
 fi
 
-# On a terminal the answer is labelled, so it cannot be mistaken for command
-# output. Piped answers stay raw.
-#
-# The model writes prose as one very long line. A terminal does not wrap words,
-# it cuts at the exact column, so a 600-character sentence comes back with
-# "serve/rs" and "aga/in" split across lines and the left edge wandering. Break
-# it at spaces to the width we actually have. `fold -s` only splits a word that
-# is itself longer than the line, and leaves the short lines of a list or a code
-# block alone.
-if [ -t 1 ]; then
-	# Read the size from the controlling terminal: `tput cols` inside $( ) sees
-	# a pipe and answers 80, whatever the window really is, and an inherited
-	# COLUMNS can be stale after a resize. The terminal itself is authoritative.
-	cols=$(stty size </dev/tty 2>/dev/null | awk '{print $2}')
+if [ -t 1 ] || [ -n "$TERAT_TTY" ]; then
+	cols=$( { stty size </dev/tty; } 2>/dev/null | awk '{print $2}')
 	[ -n "$cols" ] || cols=${COLUMNS:-}
 	[ -n "$cols" ] || cols=$(tput cols 2>/dev/null)
-	# A pty can report 0 columns before anything sets a size, and `fold -w 0`
-	# is an error rather than a no-op.
 	case $cols in ''|*[!0-9]*) cols=80 ;; esac
 	[ "$cols" -ge 20 ] || cols=80
-	# The spinner sat on its own line and wipe cleared it, so the answer needs a
-	# break to start under it.
 	printf '\n'
-	# The label is part of the first line, so folding it with the answer keeps
-	# that line from running one label too wide. Stop a column short: a line
-	# that fills the last column leaves the terminal holding a pending wrap,
-	# and the newline then opens a blank line in the middle of the answer.
-	# `fold` is external. In a pipeline its absence swallows the answer: the
-	# pipe still runs, and nothing comes out the other end. Print unwrapped
-	# instead — a long line is a cosmetic problem, a missing answer is not.
 	if command -v fold >/dev/null 2>&1; then
 		label | fold -s -w $((cols - 1))
 	else
@@ -1753,6 +1242,5 @@ else
 fi
 printf 'user: %s\nassistant: %s\n' "$q" "$ans" >>"$thread"
 
-# After the answer is on screen, so a slow collector delays nothing.
 trace_ask
 tmp_files

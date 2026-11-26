@@ -1141,6 +1141,13 @@ note="$note+acp-fail"
 
 # A healthy agent that also writes to stderr must still have only its stdout
 # treated as the answer, or the diagnostic gets stored as the reply.
+cat >/tmp/acpnoisy.sh <<'SH'
+#!/bin/sh
+cat >/dev/null
+printf 'NOISE_ON_STDERR\n' >&2
+printf 'CLEAN_ANSWER\n'
+SH
+chmod +x /tmp/acpnoisy.sh
 acp_out=$(printf '%s\n' \
 	'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1}}' \
 	'{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/tmp"}}' \
@@ -1410,6 +1417,64 @@ case $acp_out in
 *) fail "an unknown agent got no key: $acp_out" ;;
 esac
 note="$note+unknown-agent"
+
+# Queued prompts: while one question is out, the next lines are taken and asked
+# in order instead of being lost or blocking the prompt. Answered through a pty
+# because the queue lives in zle, and the point is that typing keeps working
+# while a run is still out.
+if command -v python3 >/dev/null 2>&1; then
+cat >/tmp/qstub.sh <<'SH'
+#!/bin/sh
+sleep 2
+printf 'ANSWER_FOR: %s\n' "$*"
+SH
+chmod +x /tmp/qstub.sh
+cat >/tmp/qpty.py <<'PY'
+import os, pty, select, sys, time
+pid, fd = pty.fork()
+if pid == 0:
+    os.environ.update({"TERM": "xterm-256color"})
+    os.execv("/bin/zsh", ["zsh", "-f", "-i"])
+out = b""
+def send(s, d=0.1):
+    os.write(fd, s.encode()); time.sleep(d)
+def drain(t):
+    global out
+    end = time.time() + t
+    while time.time() < end:
+        r, _, _ = select.select([fd], [], [], 0.15)
+        if r:
+            try:
+                d = os.read(fd, 65536)
+            except OSError:
+                break
+            if not d:
+                break
+            out += d
+time.sleep(1.0)
+send("source " + sys.argv[1] + " 2>/dev/null\n", 0.2)
+send("_terat_ask_bin=/tmp/qstub.sh\n", 0.2)
+send("@\n", 0.4)
+send("ONE\n", 0.4)
+send("TWO\n", 0.3)
+send("THREE\n", 0.3)
+drain(13)
+send("\x03", 0.2)
+txt = out.decode(errors="replace")
+missing = [w for w in ("ONE", "TWO", "THREE") if ("ANSWER_FOR: -- " + w) not in txt]
+if missing:
+    print("UNANSWERED:" + ",".join(missing))
+else:
+    print("ALL_ANSWERED")
+os.write(fd, b"\x15exit\n")
+PY
+	qv=$(cd /tmp && python3 /tmp/qpty.py "$D/terat.zsh" 2>&1 | grep -E 'ALL_ANSWERED|UNANSWERED' | head -1)
+	case $qv in
+	ALL_ANSWERED) ;;
+	*) fail "queued questions were not all answered: ${qv:-no verdict}" ;;
+	esac
+	note="$note+queue"
+fi
 
 echo "  note=$note"
 echo RESULT=PASS

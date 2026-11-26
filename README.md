@@ -18,6 +18,9 @@ Pi: Yes — the buffer is never freed on the error path.
 ~/src/api/src ❯
 ```
 
+Type the next question while one is still out and it is queued, then asked as
+soon as the answer lands. Nothing is lost and nothing blocks the line.
+
 No alternate screen. No redrawn prompt. No TUI. Nothing owns the terminal: the
 answer is ordinary stdout and stays in scrollback like any command's output.
 
@@ -287,7 +290,7 @@ the code is wrong** — see [the rule](CONTRIBUTING.md#the-rule).
 | File | Job |
 | --- | --- |
 | `terat` | the whole thing: asks, prints, remembers, and speaks ACP |
-| `terat.zsh` | the ask mode: glyph, Enter, `!`, Ctrl-C, plugins off |
+| `terat.zsh` | the ask mode: glyph, Enter, `!`, queueing, Ctrl-C, plugins off |
 | `terat-trace.awk` | optional: builds OTLP spans; without it, tracing says so |
 | `terat.lua` | optional: the same thing under a Rex shortcut |
 
