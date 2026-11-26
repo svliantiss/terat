@@ -925,9 +925,27 @@ give_up() {
 	exit "${1:-1}"
 }
 
+tty_out() {
+	[ -t 1 ] || [ -n "${TERAT_TTY:-}" ]
+}
+
+# The spinner is for a person, never for whatever is reading the answer. In ask
+# mode the answer is read through a pipe, so draw frames on the terminal itself
+# instead of leaving them in the text.
+spin_fd=''
+if [ -t 1 ]; then
+	spin_fd=1
+elif [ -n "${TERAT_TTY:-}" ] && ( : >/dev/tty ) 2>/dev/null; then
+	exec 9>/dev/tty && spin_fd=9
+fi
+
+spin_draw() {
+	[ -n "$spin_fd" ] || return 0
+	printf '%b' "$1" >&"$spin_fd" 2>/dev/null || :
+}
+
 wipe() {
-	[ -t 1 ] || return 0
-	printf '\r\033[K\033[?25h'
+	spin_draw '\r\033[K\033[?25h'
 }
 
 bye() {
@@ -945,12 +963,12 @@ spin() {
 	*[Uu][Tt][Ff]*8*) frames='⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏' ;;
 	*) frames='- \ | /' ;;
 	esac
-	[ -t 1 ] && printf '\033[?25l'
+	spin_draw '\033[?25l'
 	while kill -0 "$pid" 2>/dev/null; do
 		for f in $frames; do
 			sleep 0.1 2>/dev/null || sleep 1
 			kill -0 "$pid" 2>/dev/null || return 0
-			[ -t 1 ] && printf '\r%s ' "$f"
+			spin_draw "\r$f "
 			if done_yet; then
 				: >"$tmp.stopped"
 				stop_child
@@ -1225,7 +1243,7 @@ if [ -z "$ans" ]; then
 	give_up
 fi
 
-if [ -t 1 ] || [ -n "$TERAT_TTY" ]; then
+if tty_out; then
 	cols=$( { stty size </dev/tty; } 2>/dev/null | awk '{print $2}')
 	[ -n "$cols" ] || cols=${COLUMNS:-}
 	[ -n "$cols" ] || cols=$(tput cols 2>/dev/null)

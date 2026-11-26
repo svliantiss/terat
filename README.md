@@ -1,28 +1,159 @@
 # terat
 
-**The agent-compatible terminal.** Your prompt stays exactly as it is — same
-starship, same path, same colours — and one character changes: `❯` becomes `🟅`.
-Type a question instead of a command, read the answer, type another. Your
-terminal is the thread.
+Short for **Terminal Rat**.
+
+**The agent client protocol compatible native terminal experience.**
+
+Your prompt stays exactly as it is — same starship, same path, same colours — and
+one character changes: `❯` becomes `🟅`. Type a question instead of a command, read
+the answer, type another. Your terminal is the thread.
+
+This is real output, not a mock-up:
 
 ```
-~/src/api ❯ @why did that build fail?
-~/src/api 🟅 why did that build fail?
-Pi: The missing semicolon on line 42.
-~/src/api 🟅 and how do I fix it?
-Pi: Add one on line 42.
-~/src/api 🟅 !cd src                     ← shell command, stays in the mode
-~/src/api/src 🟅 @main.c does this leak?
-Pi: Yes — the buffer is never freed on the error path.
-~/src/api/src 🟅                         ← empty line or Ctrl-C: back to ❯
-~/src/api/src ❯
-```
+🟅 why did that build fail?
 
-Type the next question while one is still out and it is queued, then asked as
-soon as the answer lands. Nothing is lost and nothing blocks the line.
+Pi: Missing semicolon on line 42 of main.c.
+🟅 !cat main.c
+int main(void) {
+  return 0
+}
+🟅
+MacBookPro%                           ← empty line or Ctrl+C: back to ❯
+```
 
 No alternate screen. No redrawn prompt. No TUI. Nothing owns the terminal: the
 answer is ordinary stdout and stays in scrollback like any command's output.
+
+## What does terat do?
+
+A native tool for the shell you already use. Ask a question with `terat`, or turn
+your current shell into ask mode and stop leaving the terminal:
+
+```sh
+terat 'why did that build fail?'      # one question, answer on stdout
+terat @screenshot.png 'what is this?' # one question with a file attached
+```
+
+Then either press the shortcut, or type `@` at any prompt, and stay in the mode:
+
+```
+~/src/api ❯ @why did that build fail?   ← opens the mode and asks
+~/src/api 🟅 why did that build fail?    ← asked
+~/src/api 🟅 Pi: Missing semicolon on line 42 of main.c.
+~/src/api 🟅 and how do I fix it?        ← next question, same mode
+```
+
+## How does terat work?
+
+It drives the coding agents you already have — Pi, Claude Code, Codex, the
+DeepSeek Harness, opencode, grok — by name. `terat claude 'q'` asks Claude for one
+question; `terat set agent claude` asks Claude from then on:
+
+```sh
+terat claude 'why is the build failing?'
+terat set agent claude
+```
+
+| agent | asked with | images |
+|---|---|---|
+| `pi` | `pi -p --mode json` (default) | yes |
+| `claude` | `claude -p` | yes |
+| `codex` | `codex exec --skip-git-repo-check` | yes |
+| `opencode` | `opencode run` | yes |
+| `grok` | `grok -p {}` | yes |
+| `dsh` | `dsh --profile headless {}` | yes |
+
+Four things follow from that, and they are the whole trick:
+
+**It shares the terminal session as context.** Every question carries the working
+directory, the files beside you, and the commands already run in this shell — so
+"why did that fail" works without you pasting anything.
+
+**`@` goes in from a normal prompt, `!` comes back out.** `@` sends a question
+without leaving the shell; `!` runs an ordinary command from inside ask mode, in
+*this* shell, so `cd` and exports stick.
+
+**The same engine answers ACP.** `terat acp` speaks the
+[Agent Client Protocol](https://agentclientprotocol.com) on stdin, so an editor
+can ask what the terminal asks. One engine, two front doors — that is the
+"agent client protocol compatible" part.
+
+**Type ahead while it thinks.** A question typed while one is still out is queued
+and asked in order as the answers land. Nothing blocks the line:
+
+```
+🟅 why did that build fail?
+🟅 and the flaky test?
+  queued (1)
+🟅 ok, fix it then
+  queued (2)
+
+Pi: Missing semicolon on line 42 of main.c.
+
+Pi: It sleeps 50ms and asserts a wall clock; CI is slower.
+
+Pi: Added the semicolon and a 200ms tolerance.
+```
+
+Leaving ask mode: an empty line, `Ctrl+C`, `Ctrl+X i`, or type `terat` again.
+
+## How should I use terat?
+
+I built terat to make my local and remote shells AI compatible. In practice that
+is asking a question over SSH, or inside a container I am inspecting, without
+swapping focus or tools — that is my number one daily use.
+
+The bigger win is agentic work and sandboxes: one place to put provider
+credentials for every harness at once, so switching between them is one word
+instead of editing config in six formats. I also use it to compare harnesses on
+the same task.
+
+### Why should I use terat?
+
+Getting more done quickly. Constantly shifting focus, swapping tools, and
+copy-pasting is a real waste of time, and it is worse on a remote box or inside a
+container. If you want a small, no-fluff way to ask a question and get back to
+work, this is it.
+
+It is deliberately basic and small: a shell script and an awk script, no build, no
+runtime, no SDK. You can read all of it in an evening and change it to suit you.
+
+### terat primitives
+
+1. **A simple, native terminal experience.** It has to work like I am used to
+   from ten years of coding — whether that is a MacBook, a Raspberry Pi, or a
+   server. Your prompt, your colours, your scrollback.
+2. **Universally compatible.** The `terat` command works in `sh`, `bash`, `zsh`,
+   `fish`, in a container, over SSH. Ask mode is zsh, because holding the line
+   through the shell's own editor is what stops it feeling like a TUI.
+3. **It just has to work.** Sometimes forgotten in the AI age: I want to ask a
+   question, find a file, start a project, read a diagnostic, or have a bad
+   command corrected. That should take one line and not a new window.
+
+## Runs where the others do not
+
+A shell script and an awk script. No node, no python, no jq, no SDK.
+
+```dockerfile
+FROM alpine:3.20
+RUN apk add --no-cache gawk coreutils curl
+COPY terat terat-trace.awk /usr/local/bin/
+```
+
+```sh
+docker build -t terat . && docker run -i --rm \
+  -e TERAT_URL=https://router.example/v1 \
+  -e TERAT_KEY=sk-... \
+  -e TERAT_MODEL=some/model \
+  terat acp
+```
+
+That is the whole image. There is nothing to install and no entrypoint script.
+
+Verified in bare **Alpine (busybox)** and **Debian (dash)**: a full turn
+completes, and the conformance suite returns the identical result inside the
+container. Works with a read-only `HOME`, and with no `HOME` at all.
 
 ## Any agent, not one agent
 
@@ -67,35 +198,15 @@ on stdin, so an editor can ask the same engine the terminal does:
 terat acp        # JSON-RPC over stdio, for a client
 ```
 
+This is a second front door, not a layer under the first: `terat 'q'` and
+`terat acp` both end up running the same agent CLI. Nothing in your shell flow
+goes through the protocol.
+
 It passes the official conformance suite at **66 passed, 1 failed, 83 skipped**.
 The one failure is `ACP-SESSION-004`: an agent *should* connect to MCP servers the
 client names, and terat has no MCP. What it implements, what it refuses and why,
 and the one honest limit (turns are serial) are measured in
 [`docs/acp-compatibility.md`](docs/acp-compatibility.md).
-
-## Runs where the others do not
-
-A shell script and an awk script. No node, no python, no jq, no SDK.
-
-```dockerfile
-FROM alpine:3.20
-RUN apk add --no-cache gawk coreutils curl
-COPY terat terat-trace.awk /usr/local/bin/
-```
-
-```sh
-docker build -t terat . && docker run -i --rm \
-  -e TERAT_URL=https://router.example/v1 \
-  -e TERAT_KEY=sk-... \
-  -e TERAT_MODEL=some/model \
-  terat acp
-```
-
-That is the whole image. There is nothing to install and no entrypoint script.
-
-Verified in bare **Alpine (busybox)** and **Debian (dash)**: a full turn
-completes, and the conformance suite returns the identical result inside the
-container. Works with a read-only `HOME`, and with no `HOME` at all.
 
 ## Install
 
@@ -132,9 +243,10 @@ To remove it again:
 sh -c "$(curl -fsSL https://raw.githubusercontent.com/svliantiss/terat/main/install.sh)" --uninstall
 ```
 
-Needs `zsh` and one agent on `PATH`. `awk`, `grep`, `sed`, `od` and `date` are on
-any Unix. `curl` only for traces; `script` for the pty relay (see
-[when it is missing](#when-script-is-missing)).
+The `terat` command needs one agent on `PATH` and otherwise only `awk`, `grep`,
+`sed`, `od` and `date`, which are on any Unix. **Ask mode needs `zsh`** — that is
+what holds your line while a question is out. `curl` only for traces; `script` for
+the pty relay (see [when it is missing](#when-script-is-missing)).
 
 The first run on a machine with no agent still gives you a shell — that is where
 you install one:
@@ -162,9 +274,12 @@ The prefix is the whole interface:
 | `Ctrl+C` / empty Return | leaves the mode |
 
 Everything else is the shell you had: same prompt, same path, same scrollback.
-`Ctrl+X i` and `Option+i` also toggle the mode. `Shift+Enter` starts a second line
-so a question can be a paragraph — that needs a terminal that reports it (kitty
-keyboard protocol, xterm modifyOtherKeys, or `Option+Enter`).
+
+To toggle without typing anything: `Ctrl+X i`, `Option+i`, or `Ctrl+Shift+I` if
+your terminal speaks the kitty keyboard protocol. In Rex it is Cmd+Shift+I — see
+[the Rex section](#rex). `Shift+Enter` starts a second line, so a question can be
+a paragraph; that needs a terminal that reports it (kitty keyboard protocol, xterm
+modifyOtherKeys, or `Option+Enter`).
 
 `!` runs in *this* shell, so `cd`, `export` and aliases stick, and the command
 and its output join the transcript so the next question can refer to them.
@@ -207,10 +322,13 @@ text — and a folder is expanded to the files it holds, because an agent cannot
 read a directory:
 
 ```
-~/src/api 🟅 @shot.png what is wrong with this layout?
-~/src/api 🟅 #src/parser why is this slow?
-~/src/api 🟅 @package.json and #. compare these
+🟅 @shot.png what is wrong with this layout?
+🟅 #src/parser why is this slow?
+🟅 @package.json and #. compare these
 ```
+
+The attachment goes in before the question, as text or as an image depending on
+what the file is, and a binary is named with its size rather than inlined.
 
 Quotes are optional even with spaces in the path: a path that does not exist is
 retried with the next word, so `@My Latest Screenshot.png` works unquoted, and a
@@ -231,8 +349,9 @@ path instead of the file.
 ## While it waits
 
 A spinner turns on the line below the question and vanishes when the answer
-arrives. The frame is drawn on its own line and erased before the print, so it
-never touches the question.
+arrives. It is drawn on the terminal itself, not into the answer, so it never
+appears in piped output — `git diff | terat 'review this'` gets a clean diff and
+no frames.
 
 It waits for the run to finish rather than for a pause in the output. `pi` is a
 coding agent: asked to run a test or search a tree it goes silent while the tool

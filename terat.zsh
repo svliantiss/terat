@@ -232,6 +232,7 @@ bindkey '\e[27;2;13~' _terat_newline # xterm modifyOtherKeys: shift+enter
 bindkey '\e\r' _terat_newline        # option/alt+enter
 bindkey '^Xi' _terat_key             # Ctrl+X i
 bindkey '^[i' _terat_key             # Option+i, if the terminal sends meta
+bindkey '\e[105;6u' _terat_key        # ctrl+shift+i (kitty keyboard protocol)
 zle -N _terat_trace
 bindkey '^Xt' _terat_trace            # Ctrl+X t: trace this session
 
@@ -390,11 +391,12 @@ _terat_answer() {
 	_terat_fd=0
 	_terat_busy=0
 	zle -I
-	zle reset-prompt
-	[[ -n $out ]] && print -r -- "$out"
-	print -r --
+	# The prompt zle drew when the widget returned is already on the screen:
+	# step onto it, erase it and print the answer there. Redrawing instead
+	# leaves that glyph stranded above the answer, looking like a prompt that
+	# was never asked.
+	printf '%s%s\n' $'\033[1A\r\033[K' "$out"
 	_terat_pump
-	zle reset-prompt
 }
 
 # The run is watched by zle, not waited on, so the line stays typable while it
