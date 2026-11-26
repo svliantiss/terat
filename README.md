@@ -102,6 +102,16 @@ container. Works with a read-only `HOME`, and with no `HOME` at all.
 Nothing to build.
 
 ```sh
+sh -c "$(curl -fsSL https://raw.githubusercontent.com/svliantiss/terat/main/install.sh)"
+```
+
+That writes `terat` and `terat.zsh` to `~/.local/bin`, adds one `source` line to
+`~/.zshrc`, and tells you if `~/.local/bin` is not on your `PATH`. It prints the
+version it installed, so a failed download is visible rather than silent.
+
+Prefer to see it first, and to keep the checkout:
+
+```sh
 git clone https://github.com/svliantiss/terat
 cd terat
 mkdir -p ~/.local/bin                            # absent on a fresh machine
@@ -114,6 +124,12 @@ afterwards, that is why — add it:
 
 ```sh
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+```
+
+To remove it again:
+
+```sh
+sh -c "$(curl -fsSL https://raw.githubusercontent.com/svliantiss/terat/main/install.sh)" --uninstall
 ```
 
 Needs `zsh` and one agent on `PATH`. `awk`, `grep`, `sed`, `od` and `date` are on
@@ -299,6 +315,7 @@ the code is wrong** — see [the rule](CONTRIBUTING.md#the-rule).
 | --- | --- |
 | `terat` | the whole thing: asks, prints, remembers, and speaks ACP |
 | `terat.zsh` | the ask mode: glyph, Enter, `!`, queueing, Ctrl-C, plugins off |
+| `install.sh` | the one-liner: fetches both into `~/.local/bin`, edits `.zshrc` |
 | `terat-trace.awk` | optional: builds OTLP spans; without it, tracing says so |
 | `terat.lua` | optional: the same thing under a Rex shortcut |
 

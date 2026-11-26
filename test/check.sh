@@ -1480,5 +1480,47 @@ PY
 	note="$note+queue"
 fi
 
+# The installer. Run against this tree with TERAT_SRC_DIR, so the claims never
+# need the network and never install over a real one: HOME is a throwaway.
+rm -rf /tmp/ihm && mkdir -p /tmp/ihm
+HOME=/tmp/ihm TERAT_SRC_DIR="$D" sh "$D/install.sh" >/tmp/ihm.log 2>&1 ||
+	fail "install.sh failed: $(tail -2 /tmp/ihm.log | tr '\n' '|')"
+[ -x /tmp/ihm/.local/bin/terat ] || fail "install.sh left no binary"
+[ "$(/tmp/ihm/.local/bin/terat --version 2>&1)" = "terat $($D/terat --version | awk '{print $2}')" ] ||
+	fail "installed binary does not report its version"
+# Ask mode is sourced, not run: it has to be beside the binary and in the rc.
+[ -f /tmp/ihm/.local/bin/terat.zsh ] || fail "install.sh left no terat.zsh"
+grep -qxF "source /tmp/ihm/.local/bin/terat.zsh" /tmp/ihm/.zshrc ||
+	fail "install.sh did not add ask mode to .zshrc"
+# Running it twice must not add the source line twice.
+HOME=/tmp/ihm TERAT_SRC_DIR="$D" sh "$D/install.sh" >/dev/null 2>&1
+[ "$(grep -cF 'source /tmp/ihm/.local/bin/terat.zsh' /tmp/ihm/.zshrc)" -eq 1 ] ||
+	fail "install.sh duplicated the .zshrc line on a second run"
+note="$note+install"
+
+# Uninstall has to be a real inverse, and safe to run twice. The grep inside it
+# exits 1 when it removes the only matching line, which is success, not failure.
+HOME=/tmp/ihm sh "$D/install.sh" --uninstall >/dev/null 2>&1 ||
+	fail "install.sh --uninstall failed"
+[ -e /tmp/ihm/.local/bin/terat ] && fail "uninstall left the binary"
+[ -e /tmp/ihm/.local/bin/terat.zsh ] && fail "uninstall left terat.zsh"
+grep -qF 'terat.zsh' /tmp/ihm/.zshrc && fail "uninstall left the .zshrc line"
+HOME=/tmp/ihm sh "$D/install.sh" --uninstall >/dev/null 2>&1 ||
+	fail "install.sh --uninstall is not safe to run twice"
+note="$note+uninstall"
+
+# A download that is not terat must be refused, not installed and not left
+# looking installed. A 404 body is the realistic case: curl -f hides most, a
+# captive portal or a moved branch does not.
+rm -rf /tmp/ihbad && mkdir -p /tmp/ihbad
+printf 'Not Found\n' >/tmp/ihbad/terat
+printf 'Not Found\n' >/tmp/ihbad/terat.zsh
+rm -rf /tmp/ihm2 && mkdir -p /tmp/ihm2
+if HOME=/tmp/ihm2 TERAT_SRC_DIR=/tmp/ihbad sh "$D/install.sh" >/dev/null 2>&1; then
+	fail "install.sh installed a download that was not terat"
+fi
+[ -e /tmp/ihm2/.local/bin/terat ] && fail "a refused download left a binary behind"
+note="$note+install-refuse"
+
 echo "  note=$note"
 echo RESULT=PASS
