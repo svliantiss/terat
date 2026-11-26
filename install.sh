@@ -36,12 +36,14 @@ drop_rc() {
 	fi
 }
 
-if [ "${1:-}" = "--uninstall" ]; then
-	drop_rc
-	rm -f "$bindir/terat" "$bindir/terat.zsh"
-	say "removed terat from $bindir"
-	exit 0
-fi
+for arg in "${1:-}" "${0:-}"; do
+	if [ "$arg" = "--uninstall" ]; then
+		drop_rc
+		rm -f "$bindir/terat" "$bindir/terat.zsh"
+		say "removed terat from $bindir"
+		exit 0
+	fi
+done
 
 tmp=$(mktemp -d 2>/dev/null || mktemp -d -t terat)
 trap 'rm -rf "$tmp"' EXIT INT TERM

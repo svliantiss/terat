@@ -1507,6 +1507,11 @@ HOME=/tmp/ihm sh "$D/install.sh" --uninstall >/dev/null 2>&1 ||
 grep -qF 'terat.zsh' /tmp/ihm/.zshrc && fail "uninstall left the .zshrc line"
 HOME=/tmp/ihm sh "$D/install.sh" --uninstall >/dev/null 2>&1 ||
 	fail "install.sh --uninstall is not safe to run twice"
+HOME=/tmp/ihm TERAT_SRC_DIR="$D" sh "$D/install.sh" >/dev/null 2>&1
+HOME=/tmp/ihm sh -c "$(cat "$D/install.sh")" --uninstall >/dev/null 2>&1 ||
+	fail "install.sh --uninstall failed in the documented sh -c form"
+[ -e /tmp/ihm/.local/bin/terat ] &&
+	fail "sh -c ... --uninstall left the binary: the flag arrives in \$0, not \$1"
 note="$note+uninstall"
 
 # A download that is not terat must be refused, not installed and not left
