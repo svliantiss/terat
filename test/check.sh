@@ -1490,6 +1490,13 @@ HOME=/tmp/ihm TERAT_SRC_DIR="$D" sh "$D/install.sh" >/tmp/ihm.log 2>&1 ||
 	fail "installed binary does not report its version"
 # Ask mode is sourced, not run: it has to be beside the binary and in the rc.
 [ -f /tmp/ihm/.local/bin/terat.zsh ] || fail "install.sh left no terat.zsh"
+# The Rex half is a third file. Installed or not, the failure is the same kind:
+# Cmd+Shift+I silently does nothing because the dofile target is missing.
+[ -f /tmp/ihm/.local/bin/terat.lua ] || fail "install.sh left no terat.lua"
+grep -q 'rex.action' /tmp/ihm/.local/bin/terat.lua ||
+	fail "the installed terat.lua is not the Rex action"
+grep -q 'dofile' /tmp/ihm/.local/bin/terat.lua ||
+	fail "installed terat.lua does not say how to load it"
 grep -qxF "source /tmp/ihm/.local/bin/terat.zsh" /tmp/ihm/.zshrc ||
 	fail "install.sh did not add ask mode to .zshrc"
 # Running it twice must not add the source line twice.
@@ -1504,6 +1511,7 @@ HOME=/tmp/ihm sh "$D/install.sh" --uninstall >/dev/null 2>&1 ||
 	fail "install.sh --uninstall failed"
 [ -e /tmp/ihm/.local/bin/terat ] && fail "uninstall left the binary"
 [ -e /tmp/ihm/.local/bin/terat.zsh ] && fail "uninstall left terat.zsh"
+[ -e /tmp/ihm/.local/bin/terat.lua ] && fail "uninstall left terat.lua"
 grep -qF 'terat.zsh' /tmp/ihm/.zshrc && fail "uninstall left the .zshrc line"
 HOME=/tmp/ihm sh "$D/install.sh" --uninstall >/dev/null 2>&1 ||
 	fail "install.sh --uninstall is not safe to run twice"

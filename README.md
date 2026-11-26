@@ -286,6 +286,29 @@ make 2>&1 | terat 'why did that fail?'
 In a cron job, pass the question as an argument rather than relying on stdin, and
 `terat --trace` if you want the run in the trace collector.
 
+## Rex
+
+In [Rex](https://rex.li), Cmd+Shift+I toggles ask mode in the focused pane. The
+installer puts `terat.lua` beside the other two files; add one line to Rex's
+config and reload:
+
+```sh
+echo 'dofile(os.getenv("HOME") .. "/.local/bin/terat.lua")' >> ~/.config/rex/init.lua
+```
+
+```sh
+rex config reload      # or restart Rex
+```
+
+Rex claims the key before the shell sees it, so the action sends the shell its
+own Ctrl-X i binding: no command is typed, no Return is needed, and whatever was
+half-written on the line survives the round trip. `install.sh` prints that same
+path when it detects a Rex config.
+
+From a checkout, point the `dofile` at the file you have rather than a fixed
+location — the path in the comment at the top of `terat.lua` is an example, not
+a requirement.
+
 ## When `script` is missing
 
 The pty relay uses `script` so that a full-screen program inside `!` still has a
@@ -317,7 +340,7 @@ the code is wrong** — see [the rule](CONTRIBUTING.md#the-rule).
 | `terat.zsh` | the ask mode: glyph, Enter, `!`, queueing, Ctrl-C, plugins off |
 | `install.sh` | the one-liner: fetches both into `~/.local/bin`, edits `.zshrc` |
 | `terat-trace.awk` | optional: builds OTLP spans; without it, tracing says so |
-| `terat.lua` | optional: the same thing under a Rex shortcut |
+| `terat.lua` | the Rex half: Cmd+Shift+I toggles ask mode in the pane |
 
 ## Details
 

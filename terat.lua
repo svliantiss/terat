@@ -1,8 +1,9 @@
 -- terat.lua - the Rex half of ask mode: Cmd+Shift+I toggles it in this pane.
 --
--- Add to your Rex config:
---   dofile(os.getenv("HOME") .. "/Projects/terat/terat.lua")
--- Then: rex config reload
+-- Add to your Rex config (~/.config/rex/init.lua), then `rex config reload`:
+--   dofile(os.getenv("HOME") .. "/.local/bin/terat.lua")
+--
+-- From a checkout instead, point it at the file itself, not at a fixed place.
 --
 -- Rex claims the key before the shell sees it, so the action tells the shell
 -- directly: Ctrl-X i is a binding of its own (see terat.zsh), so nothing is

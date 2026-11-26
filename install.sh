@@ -39,7 +39,7 @@ drop_rc() {
 for arg in "${1:-}" "${0:-}"; do
 	if [ "$arg" = "--uninstall" ]; then
 		drop_rc
-		rm -f "$bindir/terat" "$bindir/terat.zsh"
+		rm -f "$bindir/terat" "$bindir/terat.zsh" "$bindir/terat.lua"
 		say "removed terat from $bindir"
 		exit 0
 	fi
@@ -50,6 +50,7 @@ trap 'rm -rf "$tmp"' EXIT INT TERM
 
 get "$base" terat >"$tmp/terat" || exit 1
 get "$base" terat.zsh >"$tmp/terat.zsh" || exit 1
+get "$base" terat.lua >"$tmp/terat.lua" || exit 1
 
 # A 404 page or a captive-portal apology must not become an executable.
 head -n 1 "$tmp/terat" | grep -q '^#!/bin/sh' ||
@@ -57,11 +58,14 @@ head -n 1 "$tmp/terat" | grep -q '^#!/bin/sh' ||
 # terat.zsh is sourced, not executed: it has no shebang to check.
 grep -q '_terat_accept' "$tmp/terat.zsh" ||
 	die "the download is not terat.zsh; check $base"
+grep -q 'rex.action' "$tmp/terat.lua" ||
+	die "the download is not terat.lua; check $base"
 
 mkdir -p "$bindir" || die "cannot create $bindir"
 chmod 755 "$tmp/terat" "$tmp/terat.zsh"
 mv "$tmp/terat" "$bindir/terat"
 mv "$tmp/terat.zsh" "$bindir/terat.zsh"
+mv "$tmp/terat.lua" "$bindir/terat.lua"
 
 # Verify the thing that was just moved, not the thing that was downloaded.
 "$bindir/terat" --version >/dev/null 2>&1 ||
@@ -84,3 +88,9 @@ case ":${PATH}:" in
 *) say "note: $bindir is not on PATH; add it with"
    say "  echo 'export PATH=\"$HOME/.local/bin:\$PATH\"' >> ~/.zshrc" ;;
 esac
+
+# Rex owns its config: say the one line rather than edit a file we do not ship.
+if [ -d "${XDG_CONFIG_HOME:-$HOME/.config}/rex" ]; then
+	say "Rex is installed. For Cmd+Shift+I there, add to its init.lua:"
+	say "  dofile(\"$bindir/terat.lua\")"
+fi
