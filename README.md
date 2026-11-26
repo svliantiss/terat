@@ -104,8 +104,16 @@ Nothing to build.
 ```sh
 git clone https://github.com/svliantiss/terat
 cd terat
-ln -sf "$PWD/terat" ~/.local/bin/terat          # type `terat` anywhere
-echo "source $PWD/terat.zsh" >> ~/.zshrc        # ask mode in zsh
+mkdir -p ~/.local/bin                            # absent on a fresh machine
+ln -sf "$PWD/terat" ~/.local/bin/terat
+echo "source $PWD/terat.zsh" >> ~/.zshrc         # ask mode in zsh
+```
+
+`~/.local/bin` is on most people's `PATH` already. If `terat` is not found
+afterwards, that is why — add it:
+
+```sh
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
 ```
 
 Needs `zsh` and one agent on `PATH`. `awk`, `grep`, `sed`, `od` and `date` are on

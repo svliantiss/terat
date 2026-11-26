@@ -47,7 +47,7 @@ mkdir -p "$D"
 # Tracked files when this is a git checkout, so ignored reference clones stay out;
 # a tarball has no .git, and then the tree is already exactly what ships. `cp -pPR`
 # with a per-file loop because `cp --parents` is GNU-only.
-if [ -d "$src/.git" ]; then
+if [ -d "$src/.git" ] && command -v git >/dev/null 2>&1; then
 	(cd "$src" && git ls-files -z 2>/dev/null) | while IFS= read -r -d '' f; do
 		# A root-level path has no `/*`, so `%/*` leaves the name itself: make
 		# the parent only when there is one, or `terat` becomes a directory.
@@ -552,6 +552,10 @@ chmod +x $D/pi
 #     needs one skips itself and still reports PASS.
 if command -v nc >/dev/null 2>&1; then
 	port=18771
+	# busybox nc spells listening `-l -p PORT`; macOS/BSD nc wants `-l HOST PORT`
+	# and rejects the other. The flavour decides, instead of assuming one.
+	nc_listen="-l 127.0.0.1 $port"
+	nc -h 2>&1 | grep -qi busybox && nc_listen="-l -p $port"
 	cat >/tmp/modelsrv.sh <<SH
 #!/bin/sh
 resp() {
@@ -560,7 +564,7 @@ resp() {
 }
 i=0
 while [ \$i -lt 4 ]; do
-	resp | nc -l 127.0.0.1 $port >/dev/null 2>&1
+	resp | nc $nc_listen >/dev/null 2>&1
 	i=\$((i + 1))
 done
 SH
