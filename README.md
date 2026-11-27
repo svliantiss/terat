@@ -275,11 +275,42 @@ The prefix is the whole interface:
 
 Everything else is the shell you had: same prompt, same path, same scrollback.
 
-To toggle without typing anything: `Ctrl+X i`, `Option+i`, or `Ctrl+Shift+I` if
-your terminal speaks the kitty keyboard protocol. In Rex it is Cmd+Shift+I — see
-[the Rex section](#rex). `Shift+Enter` starts a second line, so a question can be
-a paragraph; that needs a terminal that reports it (kitty keyboard protocol, xterm
+To toggle without typing anything: `Ctrl+X i`, or `Option+i` where the terminal
+sends meta. `Shift+Enter` starts a second line, so a question can be a paragraph;
+that needs a terminal that reports it (kitty keyboard protocol, xterm
 modifyOtherKeys, or `Option+Enter`).
+
+### Ctrl+Shift+I
+
+`Ctrl+Shift+I` is the shortcut most people try, and in most terminals it cannot
+work. A legacy terminal encodes `Ctrl`+letter as a control byte and drops the
+modifiers, so `Ctrl+I` **is** the TAB byte — by the time the shell reads `0x09`
+there is nothing left to say whether Shift was down. That is a limit of the
+terminal, not of terat.
+
+A terminal that speaks the kitty keyboard protocol can send a distinct sequence
+instead. terat.zsh already binds it, so the terminal only has to be told to send
+it. Ghostty:
+
+```
+keybind = ctrl+shift+i=text:\x1b[105;6u
+```
+
+`install.sh` adds that line to `~/.config/ghostty/config` when that file already
+exists, and removes it again with `--uninstall`. Reload Ghostty, then a new
+terminal window has the shortcut.
+
+Which terminal you are in decides whether this is possible at all:
+
+| terminal | `Ctrl+Shift+I` |
+|---|---|
+| Ghostty | works, with the keybind above (added by the installer) |
+| kitty, WezTerm, foot | works once the terminal is put in kitty-protocol mode |
+| Terminal.app, Warp | **not possible** — they never report Ctrl+Shift |
+| anywhere over SSH | depends on the client you are typing into |
+
+Where it cannot work, `Ctrl+X i` and typing `terat` always do, because they cost
+the terminal nothing.
 
 `!` runs in *this* shell, so `cd`, `export` and aliases stick, and the command
 and its output join the transcript so the next question can refer to them.

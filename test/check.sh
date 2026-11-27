@@ -1503,7 +1503,26 @@ grep -qxF "source /tmp/ihm/.local/bin/terat.zsh" /tmp/ihm/.zshrc ||
 HOME=/tmp/ihm TERAT_SRC_DIR="$D" sh "$D/install.sh" >/dev/null 2>&1
 [ "$(grep -cF 'source /tmp/ihm/.local/bin/terat.zsh' /tmp/ihm/.zshrc)" -eq 1 ] ||
 	fail "install.sh duplicated the .zshrc line on a second run"
-note="$note+install"
+# Ctrl+Shift+I needs the terminal's help: Ctrl+I is the TAB byte, so a legacy
+# terminal cannot report the modifier at all. The installer gives Ghostty a
+# distinct sequence, which terat.zsh already binds.
+mkdir -p /tmp/ihm/.config/ghostty
+printf 'keybind = cmd+k=clear_screen\n' >/tmp/ihm/.config/ghostty/config
+HOME=/tmp/ihm TERAT_SRC_DIR="$D" sh "$D/install.sh" >/dev/null 2>&1
+grep -qF 'keybind = ctrl+shift+i=text:' /tmp/ihm/.config/ghostty/config ||
+	fail "install.sh did not add the ctrl+shift+i keybind"
+# A second run must not stack the line, and must not touch other keybinds.
+HOME=/tmp/ihm TERAT_SRC_DIR="$D" sh "$D/install.sh" >/dev/null 2>&1
+[ "$(grep -cF 'keybind = ctrl+shift+i=text:' /tmp/ihm/.config/ghostty/config)" -eq 1 ] ||
+	fail "install.sh duplicated the keybind on a second run"
+grep -qF 'cmd+k=clear_screen' /tmp/ihm/.config/ghostty/config ||
+	fail "install.sh clobbered another Ghostty keybind"
+# A machine with no Ghostty config must be left alone, not given one.
+rm -rf /tmp/ihm_nogh && mkdir -p /tmp/ihm_nogh
+HOME=/tmp/ihm_nogh TERAT_SRC_DIR="$D" sh "$D/install.sh" >/dev/null 2>&1
+[ -e /tmp/ihm_nogh/.config/ghostty/config ] &&
+	fail "install.sh invented a Ghostty config where none existed"
+note="$note+install+keybind"
 
 # Uninstall has to be a real inverse, and safe to run twice. The grep inside it
 # exits 1 when it removes the only matching line, which is success, not failure.
@@ -1513,6 +1532,10 @@ HOME=/tmp/ihm sh "$D/install.sh" --uninstall >/dev/null 2>&1 ||
 [ -e /tmp/ihm/.local/bin/terat.zsh ] && fail "uninstall left terat.zsh"
 [ -e /tmp/ihm/.local/bin/terat.lua ] && fail "uninstall left terat.lua"
 grep -qF 'terat.zsh' /tmp/ihm/.zshrc && fail "uninstall left the .zshrc line"
+grep -qF 'ctrl+shift+i' /tmp/ihm/.config/ghostty/config &&
+	fail "uninstall left the ctrl+shift+i keybind"
+grep -qF 'cmd+k=clear_screen' /tmp/ihm/.config/ghostty/config ||
+	fail "uninstall clobbered another Ghostty keybind"
 HOME=/tmp/ihm sh "$D/install.sh" --uninstall >/dev/null 2>&1 ||
 	fail "install.sh --uninstall is not safe to run twice"
 HOME=/tmp/ihm TERAT_SRC_DIR="$D" sh "$D/install.sh" >/dev/null 2>&1

@@ -36,9 +36,38 @@ drop_rc() {
 	fi
 }
 
+# A keyboard shortcut has to be given to the shell by the terminal, because a
+# legacy terminal cannot report Ctrl+Shift at all: Ctrl+I is the TAB byte, so the
+# modifier is gone before zsh ever sees it. Ghostty can be told to send a
+# distinct sequence, and terat.zsh already binds that sequence. Only Ghostty is
+# touched, and only when its config exists.
+ghostty_conf=${XDG_CONFIG_HOME:-$HOME/.config}/ghostty/config
+ghostty_key='keybind = ctrl+shift+i=text:\x1b[105;6u'
+
+add_keybind() {
+	[ -f "$ghostty_conf" ] || return 0
+	grep -qF "$ghostty_key" "$ghostty_conf" && return 0
+	{
+		printf '\n# terat: ctrl+shift+i asks in this terminal. Ghostty does not send it\n'
+		printf '# by default: Ctrl+I is the TAB byte, so the modifier is lost first.\n'
+		printf '%s\n' "$ghostty_key"
+	} >>"$ghostty_conf"
+	say "ctrl+shift+i added to $ghostty_conf"
+}
+
+drop_keybind() {
+	[ -f "$ghostty_conf" ] || return 0
+	grep -qF "$ghostty_key" "$ghostty_conf" || return 0
+	grep -vF "$ghostty_key" "$ghostty_conf" |
+		grep -vF '# terat: ctrl+shift+i asks in this terminal' |
+		grep -vF '# by default: Ctrl+I is the TAB byte' >"$ghostty_conf.terat.tmp" || :
+	mv "$ghostty_conf.terat.tmp" "$ghostty_conf"
+}
+
 for arg in "${1:-}" "${0:-}"; do
 	if [ "$arg" = "--uninstall" ]; then
 		drop_rc
+		drop_keybind
 		rm -f "$bindir/terat" "$bindir/terat.zsh" "$bindir/terat.lua"
 		say "removed terat from $bindir"
 		exit 0
@@ -81,6 +110,8 @@ if command -v zsh >/dev/null 2>&1; then
 else
 	say "zsh is not installed: terat works, but ask mode needs it"
 fi
+
+add_keybind
 
 "$bindir/terat" --version
 case ":${PATH}:" in
