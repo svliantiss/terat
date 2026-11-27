@@ -12,7 +12,6 @@ This is real output, not a mock-up:
 
 ```
 🟅 why did that build fail?
-
 Pi: Missing semicolon on line 42 of main.c.
 🟅 !cat main.c
 int main(void) {
@@ -40,7 +39,7 @@ Then either press the shortcut, or type `@` at any prompt, and stay in the mode:
 ```
 ~/src/api ❯ @why did that build fail?   ← opens the mode and asks
 ~/src/api 🟅 why did that build fail?    ← asked
-~/src/api 🟅 Pi: Missing semicolon on line 42 of main.c.
+Pi: Missing semicolon on line 42 of main.c.
 ~/src/api 🟅 and how do I fix it?        ← next question, same mode
 ```
 
@@ -88,11 +87,8 @@ and asked in order as the answers land. Nothing blocks the line:
   queued (1)
 🟅 ok, fix it then
   queued (2)
-
 Pi: Missing semicolon on line 42 of main.c.
-
 Pi: It sleeps 50ms and asserts a wall clock; CI is slower.
-
 Pi: Added the semicolon and a 200ms tolerance.
 ```
 

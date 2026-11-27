@@ -395,7 +395,16 @@ _terat_answer() {
 	# step onto it, erase it and print the answer there. Redrawing instead
 	# leaves that glyph stranded above the answer, looking like a prompt that
 	# was never asked.
-	printf '%s%s\n' $'\033[1A\r\033[K' "$out"
+	# The prompt zle has just drawn may be taller than one line: starship begins
+	# its output with a newline, so it takes two. Stepping up once would land on
+	# its blank half and leave a gap between the question and the answer.
+	local _p=$(_terat_prompt_text) _up=1 _esc=''
+	while [[ $_p == $'\n'* ]]; do
+		_up=$(( _up + 1 ))
+		_p=${_p#$'\n'}
+	done
+	while (( _up-- )); do _esc+=$'\033[1A'; done
+	printf '%s\r\033[K%s\n' "$_esc" "$out"
 	_terat_pump
 }
 

@@ -154,7 +154,101 @@ if command -v tmux >/dev/null 2>&1; then
 	# `%~` unexpanded is the same bug wearing a different hat: -P is what makes
 	# the plain branch render like zle would.
 	grep -q '%~' /tmp/scr.txt && fail "pty: the prompt shows %~ instead of a path"
+	# The answer must sit directly under the question. The line the answer is
+	# printed on is one zle already drew, and how many lines that is depends on
+	# the prompt: starship begins its output with a newline, so a fixed one-line
+	# step-up landed on the prompt's blank half and left a gap. A stray blank
+	# line before the label did the same from the other side.
+	# q is the last glyph line *before* the answer, not the prompt that is
+	# redrawn underneath it, so the trailing prompt cannot satisfy the check.
+	awk '/Pi:/ && !a { a = NR } /🟅/ && !a { q = NR } END {
+		if (!a || !q || a != q + 1) exit 1
+	}' /tmp/scr.txt ||
+		fail "pty: the answer is not on the line under the question; screen was [$(grep -n -A2 -B2 'Pi:' /tmp/scr.txt | sed 's/^[[:space:]]*$/·/' | tr '\n' '|')]"
+	# The spinner borrows the question line and must erase it first. A bare \r
+	# left the frame on top of the prompt: "⠦ rat on  main 🟅".
+	grep -qE '^⠋|^⠙|^⠹|^⠸|^⠼|^⠴|^⠦|^⠧|^⠇|^⠏' /tmp/scr.txt &&
+		fail "pty: a spinner frame was left on the screen after the answer"
 	note=pty+glyph+label
+# Two bugs the claims above cannot reach, because each needs a precondition they
+# do not supply.
+#
+# 1. The spinner borrows the line the answer will print on. In ask mode zle has
+#    drawn the prompt there, so a bare \r leaves the frame on top of it.
+# 2. That line is one line only in the plain branch, where _terat_glyph replaces
+#    PROMPT with the glyph alone. Starship opens its output with a newline, so a
+#    starship prompt is taller: stepping up once lands on its blank half and
+#    strands the answer a line too high.
+#
+# Both need the shell to take the starship branch and the stand-in agent to be
+# slow enough to draw a frame. Neither holds in the instant, single-line claim
+# above, which is why reverting either fix still passed.
+cat > $D/slowpi <<'SH'
+#!/bin/sh
+cat >/dev/null
+sleep 3
+printf '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"SLOW_OK"}]}}\n'
+printf '{"type":"agent_end"}\n'
+SH
+chmod +x $D/slowpi
+# A stand-in starship. It emits a leading newline, which is the whole point, and
+# a literal %~ for the prompt to expand.
+cat > $D/starship <<'SH'
+#!/bin/sh
+[ "$1" = prompt ] && printf '\n%%~ \342\235\257 '
+exit 0
+SH
+chmod +x $D/starship
+tmux new-session -d -s S -x 100 -y 30 "env TERM=xterm-256color PATH=$D:$PATH TERAT_CMD=slowpi zsh -f -i"
+sleep 2
+tmux send-keys -t S 'setopt prompt_subst' Enter
+sleep 1
+# The branch matches on ${commands[starship]}, the resolved path, not the name.
+tmux send-keys -t S 'PROMPT=$'"'"'$('"$D"'/starship prompt)'"'" Enter
+sleep 1
+tmux send-keys -t S 'source '"$D"'/terat.zsh' Enter
+sleep 1
+tmux send-keys -t S 'print -r -- "_R=$PROMPT"' Enter
+sleep 1
+tmux capture-pane -pt S >/tmp/scrbr.txt 2>/dev/null
+grep -q '_R=.*_terat_render' /tmp/scrbr.txt ||
+	fail "pty: the starship branch was not taken, so the tall-prompt claims would be vacuous"
+# The spinner is checked on the byte stream, not a screenshot: a pane catches a
+# frame only if the capture lands in the tenth of a second one is up, so a screen
+# assertion here passes for the wrong reason almost every time. Split the stream
+# on \r and every frame is then one record, either erased or not.
+# LC_ALL is set because spin() falls back to ASCII frames without a UTF-8 locale,
+# which would leave this checking a spinner the real screen never shows.
+script -q /dev/null sh -c "PATH=$D:\$PATH LC_ALL=en_US.UTF-8 TERAT_CMD=slowpi $D/terat q" >/tmp/scrspin.txt 2>&1
+_frames='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+_erase=$(printf '\033[K')
+_erased=$(LC_ALL=C tr '\r' '\n' </tmp/scrspin.txt | LC_ALL=C grep -c "^${_erase}[$_frames]" || true)
+_bare=$(LC_ALL=C tr '\r' '\n' </tmp/scrspin.txt | LC_ALL=C grep -c "^[$_frames]" || true)
+[ "${_erased:-0}" -gt 0 ] ||
+	fail "pty: the spinner drew no erased frames, so this claim would be vacuous"
+[ "${_bare:-0}" -eq 0 ] ||
+	fail "pty: the spinner drew $_bare frame(s) without erasing the line first, so the prompt stays beside the glyph"
+# Clear, so the capture holds only rows the bug can spoil: the typed commands
+# above mention _terat_render themselves.
+tmux send-keys -t S 'clear' Enter
+sleep 1
+tmux send-keys -t S '@hello' Enter
+i=0
+while [ $i -lt 30 ]; do
+	sleep 1
+	tmux capture-pane -pt S >/tmp/scrslow.txt 2>/dev/null
+	grep -q 'SLOW_OK' /tmp/scrslow.txt && break
+	i=$((i + 1))
+done
+tmux kill-server 2>/dev/null
+grep -q 'SLOW_OK' /tmp/scrslow.txt || fail "pty: a slow answer never arrived"
+# The answer goes directly under the question, with no blank line between, even
+# though a starship prompt is two lines tall.
+awk '/SLOW_OK/ && !a { a = NR } /hello/ && !a { q = NR } END {
+	if (!a || !q || a != q + 1) exit 1
+}' /tmp/scrslow.txt ||
+	fail "pty: a tall prompt left a gap or the answer elsewhere; screen was [$(tail -8 /tmp/scrslow.txt | sed 's/^[[:space:]]*$/·/' | tr '\n' '|')]"
+note=pty+glyph+label+layout+spinner
 	# The program's own name alone flips the mode, and the name is not the one
 	# it used to be: a rename that misses this line leaves `terat` typed at the
 	# prompt being sent to the model as a question. It is its own claim because

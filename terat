@@ -968,7 +968,9 @@ spin() {
 		for f in $frames; do
 			sleep 0.1 2>/dev/null || sleep 1
 			kill -0 "$pid" 2>/dev/null || return 0
-			spin_draw "\r$f "
+			# Erase first: ask mode draws the prompt on the line the spinner
+			# borrows, so a bare \r would leave "⠦ rat on  main 🟅" behind.
+			spin_draw "\r\033[K$f "
 			if done_yet; then
 				: >"$tmp.stopped"
 				stop_child
@@ -1249,7 +1251,10 @@ if tty_out; then
 	[ -n "$cols" ] || cols=$(tput cols 2>/dev/null)
 	case $cols in ''|*[!0-9]*) cols=80 ;; esac
 	[ "$cols" -ge 20 ] || cols=80
-	printf '\n'
+	# Ask mode has already erased the line the answer belongs on, so a blank
+	# line here would push the answer down one and leave a gap under the
+	# question. Piped through a shell prompt, the gap is wanted.
+	[ -n "${TERAT_TTY:-}" ] || printf '\n'
 	if command -v fold >/dev/null 2>&1; then
 		label | fold -s -w $((cols - 1))
 	else
