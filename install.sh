@@ -114,10 +114,36 @@ fi
 add_keybind
 
 "$bindir/terat" --version
+
+# terat is a wrapper. The agent it drives already holds its own credentials, so
+# there is no key to paste and nothing to configure: worth saying out loud,
+# because an install that asks for nothing looks like an unfinished one. Report
+# the agents that are present, and say when the default one is missing.
+found=''
+for a in pi claude codex opencode grok dsh; do
+	command -v "$a" >/dev/null 2>&1 && found="$found $a"
+done
+if [ -n "$found" ]; then
+	say "agents found:$found"
+	say "no key to set: each agent holds its own"
+	case " $found " in
+	*' pi '*) ;;
+	*) say "note: pi answers by default and is not installed; use terat claude 'q' or set one with terat set agent" ;;
+	esac
+else
+	say "no agent found. terat wraps one of: pi claude codex opencode grok dsh"
+	say "install one and it answers; terat has no key of its own"
+fi
+
 case ":${PATH}:" in
 *":$bindir:"*) ;;
 *) say "note: $bindir is not on PATH; add it with"
-   say "  echo 'export PATH=\"$HOME/.local/bin:\$PATH\"' >> ~/.zshrc" ;;
+   # Say the directory that was actually installed into, not the default: with
+   # TERAT_BIN set, advice naming ~/.local/bin is advice that does not work.
+   case $bindir in
+   "$HOME"/*) say "  echo 'export PATH=\"\$HOME/${bindir#"$HOME"/}:\$PATH\"' >> ~/.zshrc" ;;
+   *) say "  echo 'export PATH=\"$bindir:\$PATH\"' >> ~/.zshrc" ;;
+   esac ;;
 esac
 
 # Rex owns its config: say the one line rather than edit a file we do not ship.

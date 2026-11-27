@@ -1616,7 +1616,32 @@ rm -rf /tmp/ihm_nogh && mkdir -p /tmp/ihm_nogh
 HOME=/tmp/ihm_nogh TERAT_SRC_DIR="$D" sh "$D/install.sh" >/dev/null 2>&1
 [ -e /tmp/ihm_nogh/.config/ghostty/config ] &&
 	fail "install.sh invented a Ghostty config where none existed"
-note="$note+install+keybind"
+# The install has to say that there is no key to set. terat wraps an agent that
+# already holds its own credentials, so a run that asked for nothing used to
+# look like a run that had not finished. It must also not claim an agent it
+# cannot see, and must name the directory it actually installed into.
+grep -q 'no key to set' /tmp/ihm.log ||
+	fail "install.sh did not say that no key is needed"
+grep -q 'agents found:' /tmp/ihm.log ||
+	fail "install.sh did not check for an installed agent"
+# A sandbox with no agents on PATH must say so rather than invent one.
+mkdir -p /tmp/ihm_noagent
+PATH=/usr/bin:/bin HOME=/tmp/ihm_noagent TERAT_BIN=/tmp/ihm_noagent/bin \
+	TERAT_SRC_DIR="$D" sh "$D/install.sh" >/tmp/ihm_noagent.log 2>&1 ||
+	fail "install.sh failed with no agents present"
+grep -q 'no agent found' /tmp/ihm_noagent.log ||
+	fail "install.sh claimed an agent on a machine with none"
+grep -q 'no key to set' /tmp/ihm_noagent.log &&
+	fail "install.sh said no key is set while also saying no agent was found"
+# The PATH hint must name the directory that was actually installed into. It
+# used to hardcode ~/.local/bin, so with TERAT_BIN set the advice did not work.
+# Asserting the right line is present, not just that the wrong one is absent:
+# the absent-check alone passed while the hint was wrong.
+grep -qF 'export PATH="$HOME/bin:$PATH"' /tmp/ihm_noagent.log ||
+	fail "install.sh did not name the real install dir in its PATH hint; log was [$(grep -A1 'not on PATH' /tmp/ihm_noagent.log | tr '\n' '|')]"
+grep -qF 'export PATH="$HOME/.local/bin:$PATH"' /tmp/ihm_noagent.log &&
+	fail "install.sh printed the default bindir instead of the one it used"
+note="$note+install+keybind+message"
 
 # Uninstall has to be a real inverse, and safe to run twice. The grep inside it
 # exits 1 when it removes the only matching line, which is success, not failure.

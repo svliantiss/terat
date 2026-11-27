@@ -145,6 +145,10 @@ docker build -t terat . && docker run -i --rm \
   terat acp
 ```
 
+The three `-e` lines are there because a container has no logged-in agent to
+borrow a key from. On your own machine they are unnecessary — see
+[there is nothing to configure](#there-is-nothing-to-configure).
+
 That is the whole image. There is nothing to install and no entrypoint script.
 
 Verified in bare **Alpine (busybox)** and **Debian (dash)**: a full turn
@@ -214,7 +218,37 @@ sh -c "$(curl -fsSL https://raw.githubusercontent.com/svliantiss/terat/main/inst
 
 That writes `terat` and `terat.zsh` to `~/.local/bin`, adds one `source` line to
 `~/.zshrc`, and tells you if `~/.local/bin` is not on your `PATH`. It prints the
-version it installed, so a failed download is visible rather than silent.
+version it installed, so a failed download is visible rather than silent. It also
+lists the agents it found — see below.
+
+### There is nothing to configure
+
+terat is a wrapper. The agent it drives already has its own key, its own login
+and its own config, and terat borrows all of it. Nothing to export, no key to
+paste, no first-run wizard. Install it and ask:
+
+```sh
+terat 'why did that build fail?'
+```
+
+The installer reports which of the six agents it found, because an install that
+asks for nothing looks unfinished:
+
+```
+terat 1.0.0
+agents found: pi claude codex opencode grok dsh
+no key to set: each agent holds its own
+```
+
+`pi` answers by default. If `pi` is not the one you installed, name another once
+(`terat claude '…'`) or make it the default (`terat set agent claude`). If no
+agent is found it says so, and `terat` with no arguments still gives you a shell
+to install one in.
+
+Setting an endpoint is the exception, not the rule: it exists for pointing an
+agent somewhere else, and for machines where the agent is not logged in. See
+[Endpoint, key, model](#endpoint-key-model). If you never run `terat set`, that
+section does not apply to you.
 
 Prefer to see it first, and to keep the checkout:
 
@@ -395,6 +429,10 @@ width of your terminal before printing.
 
 ## Endpoint, key, model
 
+**You can skip this.** By default terat sets no endpoint and no key: the agent it
+wraps uses its own, which is why a fresh install works with nothing configured.
+Everything below is an override for pointing an agent somewhere else.
+
 ```sh
 terat --version             # the release, for a bug report
 terat set url https://router.example/v1
@@ -402,6 +440,12 @@ terat models                # what it serves, one per line, vision or text
 terat set key sk-...
 terat set model some/model
 terat config                # url, model, and key=(set)
+```
+
+`terat config` prints that nothing is set until you set something:
+
+```
+terat: no settings yet; ~/.config/terat/settings does not exist
 ```
 
 `terat models` asks the endpoint for its own list, so a model is named rather than
